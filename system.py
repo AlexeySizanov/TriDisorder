@@ -8,24 +8,23 @@ class TDSystem:
         self.N = L ** 2
         self.c = c
 
-        self.make_connections()
         self.make_spins()
-        
+        self.make_connections()
+
         
     def make_spins(self):
-        cosThetas = np.random.rand(self.L, self.L)
+        cosThetas = np.random.rand(self.N) * 2 - 1
 
         Rxys = np.sqrt(1 - cosThetas**2)
 
-        phis = np.random.rand(self.L, self.L) * 2 * np.pi
+        phis = np.random.rand(self.N) * 2 * np.pi
 
         self.spins = np.array([
             Rxys * np.cos(phis),
             Rxys * np.sin(phis),
             cosThetas
-        ]).transpose((1, 2, 0))
+        ]).transpose((1, 0))
 
-        self.spins_flat = self.spins.reshape(-1, 3)
 
     def make_connections(self):
         self.conn = sparse.lil_matrix((self.N, self.N))
@@ -42,8 +41,8 @@ class TDSystem:
 
         xs_m = xs - 1
         xs_mi = (xs_m >= 0) & np.isin(xs_m + ys * self.L, inds)
-        self.conn[  xs[xs_mi] + ys * self.L, xs_m[xs_mi] + ys[xs_mi] * self.L] = True
-        self.conn[xs_m[xs_mi] + ys * self.L,   xs[xs_mi] + ys[xs_mi] * self.L] = True
+        self.conn[  xs[xs_mi] + ys[xs_mi]  * self.L, xs_m[xs_mi] + ys[xs_mi] * self.L] = True
+        self.conn[xs_m[xs_mi] + ys[xs_mi]  * self.L,   xs[xs_mi] + ys[xs_mi] * self.L] = True
 
 
         ys_p = ys + 1
@@ -66,6 +65,16 @@ class TDSystem:
         self.conn[xs_p[ipm] + ys_m[ipm] * self.L,   xs[ipm] +   ys[ipm] * self.L] = True
 
         self.conn = sparse.csr_matrix(self.conn)
+
+        self.active = np.array(self.conn.sum(axis=1)).reshape(-1) > 0
+        self.inds = np.where(self.active)[0]
+
+
+    def update(self, n=1):
+        for _ in range(n):
+            self.spins[self.inds] = self.conn.dot(self.spins)[self.inds]
+            self.normalize()
+
 
 
     def normalize(self):
