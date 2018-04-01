@@ -70,12 +70,18 @@ class TDSystem:
         self.inds = np.where(self.active)[0]
 
 
-    def update(self, n=1):
-        for _ in range(n):
-            self.spins[self.inds] = self.conn.dot(self.spins)[self.inds]
-            self.normalize()
+    def update(self, n=1, field=None):
+        if field is None:
+            for _ in range(n):
+                self.spins[self.inds] = - self.conn.dot(self.spins)[self.inds]
+                self.normalize()
+        else:
+            for _ in range(n):
+                self.spins = - self.conn.dot(self.spins) - field
+                self.normalize()
 
-
+    def optimize(self, field=None, threshold=1e-10):
+        pass
 
     def normalize(self):
         self.spins /= np.linalg.norm(self.spins, axis=-1, keepdims=True)
