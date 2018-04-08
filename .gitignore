@@ -1,2 +1,6 @@
 
 \.idea/
+
+\.ipynb_checkpoints/
+
+__pycache__/system\.cpython-36\.pyc

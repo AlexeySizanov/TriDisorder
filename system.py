@@ -29,6 +29,8 @@ class TDSystem:
         self.inds = np.random.choice(all_inds, int(self.N * (1. - self.c)), replace=False)
         self.inds.sort()
         self.hole_inds = all_inds[~np.isin(all_inds, self.inds)]
+
+        self.n_spins = self.inds.shape[0]
         # self.spins[self.hole_inds] *= 0.
 
     def make_connections(self):
@@ -59,13 +61,13 @@ class TDSystem:
         self.conn[xs[ys_mi] + ys_m[ys_mi] * self.L, xs[ys_mi] +   ys[ys_mi] * self.L] = 1.
 
 
-        ipm = (xs_p < self.L) & (ys_m >= 0) & np.isin(xs_p + ys_m * self.L, self.inds)
-        self.conn[  xs[ipm] +   ys[ipm] * self.L, xs_p[ipm] + ys_m[ipm] * self.L] = 1.
-        self.conn[xs_p[ipm] + ys_m[ipm] * self.L,   xs[ipm] +   ys[ipm] * self.L] = 1.
-
-        ipm = (ys_p < self.L) & (xs_m >= 0) & np.isin(xs_m + ys_p * self.L, self.inds)
-        self.conn[  xs[ipm] +   ys[ipm] * self.L, xs_p[ipm] + ys_m[ipm] * self.L] = 1.
-        self.conn[xs_p[ipm] + ys_m[ipm] * self.L,   xs[ipm] +   ys[ipm] * self.L] = 1.
+        # ipm = (xs_p < self.L) & (ys_m >= 0) & np.isin(xs_p + ys_m * self.L, self.inds)
+        # self.conn[  xs[ipm] +   ys[ipm] * self.L, xs_p[ipm] + ys_m[ipm] * self.L] = 1.
+        # self.conn[xs_p[ipm] + ys_m[ipm] * self.L,   xs[ipm] +   ys[ipm] * self.L] = 1.
+        #
+        # ipm = (ys_p < self.L) & (xs_m >= 0) & np.isin(xs_m + ys_p * self.L, self.inds)
+        # self.conn[  xs[ipm] +   ys[ipm] * self.L, xs_p[ipm] + ys_m[ipm] * self.L] = 1.
+        # self.conn[xs_p[ipm] + ys_m[ipm] * self.L,   xs[ipm] +   ys[ipm] * self.L] = 1.
 
         self.ham = self.conn.copy()
         self.ham = sparse.csr_matrix(self.ham)
@@ -90,20 +92,32 @@ class TDSystem:
                     return n
             self.spins = new_spins
 
-    def _opt_step(self, fielf=zero_field):
-        self.spins = self.new_state(fielf)
-        print('energy =', self.energy())
+    def opt_step(self, field=zero_field, frac=0.5, out=True):
+        n = int(self.n_spins * frac)
+        inds = np.random.choice(self.inds, n, replace=False)
+        self.spins[inds] = self.new_state(field=field)[inds]
+        if out:
+            print('energy =', self.energy_density())
+
+    def opt_steps(self, n_steps: int=1, field: np.ndarray=zero_field):
+        for _ in range(n_steps-1):
+            self.opt_step(field=field, out=False)
+        self.opt_step(field=field, out=True)
 
     def measure(self):
         pass #TODO: measure method
 
-    def energy(self):
-        return np.einsum('ai,ai->', self.spins, self.ham.dot(self.spins)) / 2.
+    def energy_density(self):
+        return np.einsum('ai,ai->', self.spins, self.ham.dot(self.spins)) / (2. * self.n_spins)
 
     def normalize(self):
         self.spins /= np.linalg.norm(self.spins, axis=-1, keepdims=True)
 
-    def plot_lattice(self, shift=True):
+    def make_xy(self):
+        self.spins[:, 2] = 0.
+        self.normalize()
+
+    def plot(self, spins=True, lattice=True, shift=True):
         xs = self.inds % self.L
         ys = self.inds // self.L
 
@@ -112,13 +126,15 @@ class TDSystem:
 
         plt.scatter(xs, ys)
 
-        for i1 in range(self.inds.shape[0]):
-            for i2 in range(i1, self.inds.shape[0]):
-                ii1 = self.inds[i1]
-                ii2 = self.inds[i2]
-                if self.conn[ii1, ii2]:
-                     plt.plot(xs[[i1, i2]], ys[[i1, i2]])
+        if lattice:
+            for i1 in range(self.inds.shape[0]):
+                for i2 in range(i1, self.inds.shape[0]):
+                    ii1 = self.inds[i1]
+                    ii2 = self.inds[i2]
+                    if self.conn[ii1, ii2]:
+                         plt.plot(xs[[i1, i2]], ys[[i1, i2]])
 
-        plt.show()
-
+        if spins:
+            for i in range(self.inds.shape[0]):
+                plt.plot([xs[i], xs[i] + self.spins[self.inds[i], 0]/2], [ys[i], ys[i] + self.spins[self.inds[i], 1]/2], color='black')
 
