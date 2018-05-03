@@ -60,6 +60,9 @@ class TDSystem:
         self.conn[xs[ys_mi] +   ys[ys_mi] * self.L, xs[ys_mi] + ys_m[ys_mi] * self.L] = 1.
         self.conn[xs[ys_mi] + ys_m[ys_mi] * self.L, xs[ys_mi] +   ys[ys_mi] * self.L] = 1.
 
+        ipm = (xs_p < self.L) & (ys_m >= 0) & np.isin(xs_p + ys_m * self.L, self.inds)
+        self.conn[  xs[ipm] +   ys[ipm] * self.L, xs_p[ipm] + ys_m[ipm] * self.L] = 1.
+        self.conn[xs_p[ipm] + ys_m[ipm] * self.L,   xs[ipm] +   ys[ipm] * self.L] = 1.
 
         # ipm = (xs_p < self.L) & (ys_m >= 0) & np.isin(xs_p + ys_m * self.L, self.inds)
         # self.conn[  xs[ipm] +   ys[ipm] * self.L, xs_p[ipm] + ys_m[ipm] * self.L] = 1.
@@ -75,8 +78,11 @@ class TDSystem:
         self.conn[self.hole_inds, self.hole_inds] = -1.
         self.conn = sparse.csr_matrix(self.conn)
 
+    def molecular_field(self, field=zero_field):
+        return - self.conn.dot(self.spins) - field
+
     def new_state(self, field=zero_field):
-        new_spins = - self.conn.dot(self.spins) - field
+        new_spins = self.molecular_field(field)
         return new_spins / np.linalg.norm(new_spins, axis=1, keepdims=True)
 
     def optimize(self, field=zero_field, threshold=1e-10):
@@ -99,10 +105,27 @@ class TDSystem:
         if out:
             print('energy =', self.energy_density())
 
-    def opt_steps(self, n_steps: int=1, field: np.ndarray=zero_field):
+    def opt_steps(self, n_steps: int=1, frac=0.5, field: np.ndarray=zero_field):
         for _ in range(n_steps-1):
-            self.opt_step(field=field, out=False)
-        self.opt_step(field=field, out=True)
+            self.opt_step(field=field, out=False, frac=frac)
+        self.opt_step(field=field, out=True, frac=frac)
+
+
+    def sgd_step(self, field=zero_field, lr=0.1, frac=0.5):
+        mf = self.molecular_field(field)
+        ds1 = mf - self.spins
+        ds = ds1 - np.einsum('ai,aj,aj->ai', self.spins, self.spins, ds1)
+
+        n = int(self.n_spins * frac)
+        inds = np.random.choice(self.inds, n, replace=False)
+
+        self.spins[inds] += ds[inds] * lr
+        self.normalize()
+
+    def sgd(self, field=zero_field, lr=0.1, n_steps=10, frac=0.5):
+        for _ in range(n_steps):
+            self.sgd_step(field=field, lr=lr, frac=frac)
+        print(self.energy_density())
 
     def measure(self):
         pass #TODO: measure method
@@ -116,6 +139,15 @@ class TDSystem:
     def make_xy(self):
         self.spins[:, 2] = 0.
         self.normalize()
+
+    def rot_xy(self, alpha):
+        alpha =alpha * np.pi / 180.
+        R = np.array([
+            [np.cos(alpha), np.sin(alpha), 0],
+            [-np.sin(alpha), np.cos(alpha), 0],
+            [0., 0., 1.]
+        ])
+        self.spins = np.einsum('ij,aj->ai', R, self.spins)
 
     def plot(self, spins=True, lattice=True, shift=True):
         xs = self.inds % self.L
