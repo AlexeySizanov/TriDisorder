@@ -1,7 +1,10 @@
 import numpy as np
 from scipy import sparse
-import matplotlib.pyplot as plt
+from scipy import fftpack
+from multiprocessing import Pool
 
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 zero_field = np.array([0., 0., 0.])
 
@@ -98,12 +101,31 @@ class TDSystem:
                     return n
             self.spins = new_spins
 
+
+    def adam(self, lr=0.1, n_steps=1, frac=0.3, field=zero_field, beta1=0.9, beta2=0.9):
+        v = np.zeros_like(self.spins)
+        G = np.zeros_like(self.spins)
+        n = int(self.n_spins * frac)
+        for _ in range(n_steps):
+            mf = self.molecular_field(field)
+            ds = mf - self.spins
+
+            ds = ds - np.einsum('ai,aj,aj->ai', self.spins, self.spins, ds)
+            v = v - np.einsum('ai,aj,aj->ai', self.spins, self.spins, v)
+
+            v = (1. - beta1) * ds + beta1 * v
+            G = (1. - beta2) * (ds**2) + beta2 * G
+            inds = np.random.choice(self.inds, n, replace=False)
+            tmp = np.sqrt(G[inds] + 1e-10)
+            self.spins[inds] += lr * v[inds] / tmp
+            self.normalize()
+
     def opt_step(self, field=zero_field, frac=0.5, out=True):
         n = int(self.n_spins * frac)
         inds = np.random.choice(self.inds, n, replace=False)
         self.spins[inds] = self.new_state(field=field)[inds]
         if out:
-            print('energy =', self.energy_density())
+            print('energy =', self.measure_energy_density())
 
     def opt_steps(self, n_steps: int=1, frac=0.5, field: np.ndarray=zero_field):
         for _ in range(n_steps-1):
@@ -128,17 +150,32 @@ class TDSystem:
         # if out:
         #     print(self.energy_density())
 
-    def measure(self):
-        pass #TODO: measure method: Fourier, etc...
+    def measure_all(self):
+        self.measure_fourier()
+        self.measure_energy_density()
+
+    def measure_fourier(self):
+        self.spins[self.hole_inds] = np.array([0., 0., 0.])
+        self.fourier = (np.abs(fftpack.fft2(self.spins.reshape(self.L, self.L, 3), axes=(0, 1)))**2).sum(axis=-1)
+        self.spins[self.hole_inds] = np.array([1., 0., 0.])
+
+    def make_random(self):
+        phis = np.random.rand(self.N) * 2 * np.pi
+        cos_thetas = np.random.rand(self.N) * 2 - 1
+        sin_thetas = np.sqrt(1 - cos_thetas**2)
+        self.spins = np.array([sin_thetas * np.cos(phis), sin_thetas * np.sin(phis), cos_thetas]).transpose(1, 0    )
+
+    def randomize(self):
+        pass
+
+    def make_helix_xy(self):
+        xs = np.arange(self.L).reshape(-1, 1)
+        ys = np.arange(self.L).reshape(1, -1)
 
 
-    def randimize(self):
-        pass #TODO: randomization
 
-
-
-    def energy_density(self):
-        return np.einsum('ai,ai->', self.spins, self.ham.dot(self.spins)) / (2. * self.n_spins)
+    def measure_energy_density(self):
+        self.energy_density = np.einsum('ai,ai->', self.spins, self.ham.dot(self.spins)) / (2. * self.n_spins)
 
     def normalize(self):
         self.spins /= np.linalg.norm(self.spins, axis=-1, keepdims=True)
@@ -176,4 +213,59 @@ class TDSystem:
         if spins:
             for i in range(self.inds.shape[0]):
                 plt.plot([xs[i], xs[i] + self.spins[self.inds[i], 0]/2], [ys[i], ys[i] + self.spins[self.inds[i], 1]/2], color='black')
+
+    def plot_fourier(self):
+        sns.heatmap(self.fourier)
+
+
+
+class TDResult:
+    @classmethod
+    def empty(cls):
+        return TDResult(None, None, None, None, 0)
+
+    def __init__(self, L, c, energy_density, fourier, n):
+        self.n = n
+
+        self.L = L
+        self.c = c
+        self.energy_density = energy_density
+        self.fourier = fourier
+
+
+    def copy(self):
+        res = TDResult.empty()
+        res.L = self.L
+        res.c = self.c
+        res.energy_density = self.energy_density
+        res.fourier = self.fourier.copy()
+        return res
+
+    def _add__(self, other):
+        """
+        :type other: TDResult
+        :rtype: TDResult
+        """
+        if (self.L != other.L) or (self.c != other.c):
+            raise Exception('TDResult.__add__ : systems must be similar.')
+
+        if self.n == 0:
+            if other.n == 0:
+                raise Exception('TDResult.__add__ : both results are empty')
+            else:
+                return other.copy()
+        elif other.n == 0:
+            return self.copy()
+
+
+        res = TDResult.empty()
+
+        res.L = self.L
+        res.c = self.c
+        res.n = self.n + other.n
+
+        res.energy_density = (self.energy_density * self.n + other.energy_density * other.n) / res.n
+        res.fourier = (self.fourier * self.n + other.fourier * other.n) / res.n
+
+        return res
 
