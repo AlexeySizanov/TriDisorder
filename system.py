@@ -108,7 +108,7 @@ class TDSystem:
     def opt_steps(self, n_steps: int=1, frac=0.5, field: np.ndarray=zero_field):
         for _ in range(n_steps-1):
             self.opt_step(field=field, out=False, frac=frac)
-        self.opt_step(field=field, out=True, frac=frac)
+        # self.opt_step(field=field, out=True, frac=frac)
 
 
     def sgd_step(self, field=zero_field, lr=0.1, frac=0.5):
@@ -122,13 +122,20 @@ class TDSystem:
         self.spins[inds] += ds[inds] * lr
         self.normalize()
 
-    def sgd(self, field=zero_field, lr=0.1, n_steps=10, frac=0.5):
+    def sgd(self, field=zero_field, lr=0.1, n_steps=10, frac=0.5, out=True):
         for _ in range(n_steps):
             self.sgd_step(field=field, lr=lr, frac=frac)
-        print(self.energy_density())
+        # if out:
+        #     print(self.energy_density())
 
     def measure(self):
-        pass #TODO: measure method
+        pass #TODO: measure method: Fourier, etc...
+
+
+    def randimize(self):
+        pass #TODO: randomization
+
+
 
     def energy_density(self):
         return np.einsum('ai,ai->', self.spins, self.ham.dot(self.spins)) / (2. * self.n_spins)
