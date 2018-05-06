@@ -9,10 +9,11 @@ import seaborn as sns
 zero_field = np.array([0., 0., 0.])
 
 class TDSystem:
-    def __init__(self, L, c):
+    def __init__(self, L, c, periodic=False):
         self.L = L
         self.N = L ** 2
         self.c = c
+        self.periodic=periodic
 
         self.make_spins()
         self.make_connections()
@@ -75,6 +76,24 @@ class TDSystem:
         # self.conn[  xs[ipm] +   ys[ipm] * self.L, xs_p[ipm] + ys_m[ipm] * self.L] = 1.
         # self.conn[xs_p[ipm] + ys_m[ipm] * self.L,   xs[ipm] +   ys[ipm] * self.L] = 1.
 
+        if self.periodic:
+            i_x_start = np.arange(self.L)
+            i_x_end = np.arange(self.L) + self.L * (self.L - 1)
+            self.conn[i_x_start, i_x_end] = 1.
+            self.conn[i_x_end, i_x_start] = 1.
+
+
+            i_y_start = np.arange(self.L) * self.L
+            i_y_end = np.concatenate([
+                np.arange(self.L // 2, self.L), np.arange(0, self.L // 2)
+            ]) * self.L + (self.L - 1)
+            self.conn[i_y_start, i_y_end] = 1.
+            self.conn[i_y_end, i_y_start] = 1.
+
+            self.conn[self.hole_inds, :] = 0.
+            self.conn[:, self.hole_inds] = 0.
+
+
         self.ham = self.conn.copy()
         self.ham = sparse.csr_matrix(self.ham)
 
@@ -102,22 +121,26 @@ class TDSystem:
             self.spins = new_spins
 
 
-    def adam(self, lr=0.1, n_steps=1, frac=0.3, field=zero_field, beta1=0.9, beta2=0.9):
+    def adam(self, lr=0.1, n_steps=1, frac=1.0, field=zero_field, beta1=0.9, beta2=0.9):
         v = np.zeros_like(self.spins)
         G = np.zeros_like(self.spins)
         n = int(self.n_spins * frac)
-        for _ in range(n_steps):
-            mf = self.molecular_field(field)
-            ds = mf - self.spins
+        for t in range(n_steps):
+            ds = self.molecular_field(field)
 
             ds = ds - np.einsum('ai,aj,aj->ai', self.spins, self.spins, ds)
-            v = v - np.einsum('ai,aj,aj->ai', self.spins, self.spins, v)
+            # v = v - np.einsum('ai,aj,aj->ai', self.spins, self.spins, v)
 
             v = (1. - beta1) * ds + beta1 * v
             G = (1. - beta2) * (ds**2) + beta2 * G
+
+            vt = v / (1. - beta1**(t+1))
+            Gt = G / (1. - beta2**(t+1))
+
             inds = np.random.choice(self.inds, n, replace=False)
-            tmp = np.sqrt(G[inds] + 1e-10)
-            self.spins[inds] += lr * v[inds] / tmp
+            tmp = np.sqrt(Gt[inds] + 1e-10)
+
+            self.spins[inds] += lr * vt[inds] / tmp
             self.normalize()
 
     def opt_step(self, field=zero_field, frac=0.5, out=True):
@@ -127,13 +150,13 @@ class TDSystem:
         if out:
             print('energy =', self.measure_energy_density())
 
-    def opt_steps(self, n_steps: int=1, frac=0.5, field: np.ndarray=zero_field):
+    def opt_steps(self, n_steps: int=1, frac=1.0, field: np.ndarray=zero_field):
         for _ in range(n_steps-1):
             self.opt_step(field=field, out=False, frac=frac)
         # self.opt_step(field=field, out=True, frac=frac)
 
 
-    def sgd_step(self, field=zero_field, lr=0.1, frac=0.5):
+    def sgd_step(self, field=zero_field, lr=0.1, frac=1.0):
         mf = self.molecular_field(field)
         ds1 = mf - self.spins
         ds = ds1 - np.einsum('ai,aj,aj->ai', self.spins, self.spins, ds1)
