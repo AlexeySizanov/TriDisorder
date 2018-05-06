@@ -165,13 +165,19 @@ class TDSystem:
         sin_thetas = np.sqrt(1 - cos_thetas**2)
         self.spins = np.array([sin_thetas * np.cos(phis), sin_thetas * np.sin(phis), cos_thetas]).transpose(1, 0    )
 
-    def randomize(self):
-        pass
+    def randomize(self, rate=0.1):
+        phis = np.random.rand(self.N) * 2 * np.pi
+        cos_thetas = np.random.rand(self.N) * 2 - 1
+        sin_thetas = np.sqrt(1 - cos_thetas**2)
+        self.spins += rate * np.array([sin_thetas * np.cos(phis), sin_thetas * np.sin(phis), cos_thetas]).transpose(1, 0    )
+        self.normalize()
 
     def make_helix_xy(self):
         xs = np.arange(self.L).reshape(-1, 1)
         ys = np.arange(self.L).reshape(1, -1)
-
+        phis = np.pi * (4 * xs + 2 * ys) / 3
+        spins = np.array([np.cos(phis), np.sin(phis), np.zeros_like(phis)]).transpose(1, 2, 0)
+        self.spins = spins.reshape(-1, 3)
 
 
     def measure_energy_density(self):
@@ -215,7 +221,7 @@ class TDSystem:
                 plt.plot([xs[i], xs[i] + self.spins[self.inds[i], 0]/2], [ys[i], ys[i] + self.spins[self.inds[i], 1]/2], color='black')
 
     def plot_fourier(self):
-        sns.heatmap(self.fourier)
+        plt.imshow(self.fourier)
 
 
 
