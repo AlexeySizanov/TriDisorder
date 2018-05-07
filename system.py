@@ -5,6 +5,7 @@ from multiprocessing import Pool
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+from tqdm import tqdm, trange
 
 zero_field = np.array([0., 0., 0.])
 
@@ -155,6 +156,14 @@ class TDSystem:
             self.opt_step(field=field, out=False, frac=frac)
         # self.opt_step(field=field, out=True, frac=frac)
 
+    def opt2(self, n_steps=1, field=zero_field):
+        Lh = self.L // 2
+        for _ in trange(n_steps, desc='steps'):
+            for i in range(1, Lh+1):
+                ss = np.arange(Lh - i, Lh + i)
+                xs, ys = np.meshgrid(ss, ss)
+                inds = (xs + self.L * ys).flatten()
+                self.spins[inds] = self.new_state(field=field)[inds]
 
     def sgd_step(self, field=zero_field, lr=0.1, frac=1.0):
         mf = self.molecular_field(field)
@@ -167,11 +176,21 @@ class TDSystem:
         self.spins[inds] += ds[inds] * lr
         self.normalize()
 
-    def sgd(self, field=zero_field, lr=0.1, n_steps=10, frac=0.5, out=True):
+    def sgd(self, lr=0.1, n_steps=10, frac=0.5, field=zero_field, out=True):
         for _ in range(n_steps):
             self.sgd_step(field=field, lr=lr, frac=frac)
         # if out:
         #     print(self.energy_density())
+
+
+    def relaxation(self, gamma, alpha, n_steps=1, field=zero_field):
+        v = np.zeros_like(self.spins)
+        for _ in range(n_steps):
+            mf = self.molecular_field(field)
+            v = -gamma * np.cross(self.spins, mf) + alpha * np.cross(self.spins, v)
+            self.spins += v
+            self.normalize()
+
 
     def measure_all(self):
         self.measure_fourier()
