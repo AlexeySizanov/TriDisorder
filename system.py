@@ -77,19 +77,36 @@ class TDSystem:
         # self.conn[  xs[ipm] +   ys[ipm] * self.L, xs_p[ipm] + ys_m[ipm] * self.L] = 1.
         # self.conn[xs_p[ipm] + ys_m[ipm] * self.L,   xs[ipm] +   ys[ipm] * self.L] = 1.
 
+        # if self.periodic:
+        #     i_x_start = np.arange(self.L)
+        #     i_x_end = np.arange(self.L) + self.L * (self.L - 1)
+        #     self.conn[i_x_start, i_x_end] = 1.
+        #     self.conn[i_x_end, i_x_start] = 1.
+        #
+        #
+        #     i_y_start = np.arange(self.L) * self.L
+        #     i_y_end = np.concatenate([
+        #         np.arange(self.L // 2, self.L), np.arange(0, self.L // 2)
+        #     ]) * self.L + (self.L - 1)
+        #     self.conn[i_y_start, i_y_end] = 1.
+        #     self.conn[i_y_end, i_y_start] = 1.
+        #
+        #     self.conn[self.hole_inds, :] = 0.
+        #     self.conn[:, self.hole_inds] = 0.
+
         if self.periodic:
-            i_x_start = np.arange(self.L)
-            i_x_end = np.arange(self.L) + self.L * (self.L - 1)
-            self.conn[i_x_start, i_x_end] = 1.
-            self.conn[i_x_end, i_x_start] = 1.
-
-
             i_y_start = np.arange(self.L) * self.L
-            i_y_end = np.concatenate([
-                np.arange(self.L // 2, self.L), np.arange(0, self.L // 2)
-            ]) * self.L + (self.L - 1)
+            i_y_end = np.arange(self.L) * self.L + (self.L - 1)
             self.conn[i_y_start, i_y_end] = 1.
             self.conn[i_y_end, i_y_start] = 1.
+
+
+            i_x_start = np.arange(self.L)
+            i_x_end = np.concatenate([
+                np.arange(self.L // 2, self.L), np.arange(0, self.L // 2)
+            ]) + self.L * (self.L - 1)
+            self.conn[i_x_start, i_x_end] = 1.
+            self.conn[i_x_end, i_x_start] = 1.
 
             self.conn[self.hole_inds, :] = 0.
             self.conn[:, self.hole_inds] = 0.
@@ -183,12 +200,16 @@ class TDSystem:
         #     print(self.energy_density())
 
 
-    def relaxation(self, gamma, alpha, n_steps=1, field=zero_field):
+    def relaxation(self, lr, alpha, n_steps=1, field=zero_field, beta=0.9):
         v = np.zeros_like(self.spins)
+        w = np.zeros_like(self.spins)
         for _ in range(n_steps):
             mf = self.molecular_field(field)
-            v = -gamma * np.cross(self.spins, mf) + alpha * np.cross(self.spins, v)
-            self.spins += v
+            MH = np.cross(self.spins, mf)
+            w = beta * w - (1.-beta) * np.cross(self.spins, MH)
+            # v = -gamma * MH + alpha * gamma * np.cross(self.spins, MH)
+            v = (np.cross(w, self.spins) + alpha * w)
+            self.spins += lr * v
             self.normalize()
 
 
@@ -221,6 +242,20 @@ class TDSystem:
         spins = np.array([np.cos(phis), np.sin(phis), np.zeros_like(phis)]).transpose(1, 2, 0)
         self.spins = spins.reshape(-1, 3)
 
+    def make_helix(self):
+        self.make_helix_xy()
+        rot_yz = np.array([
+            [1., 0., 0.],
+            [0., 0., -1.],
+            [0., 1., 0.]
+        ])
+        a = np.pi * 4 / 3
+        rot_xy = np.array([
+            [np.cos(a), np.sin(a), 0.],
+            [-np.sin(a), np.cos(a), 0.],
+            [0., 0., 1.]
+        ])
+        self.spins = np.einsum('ij,jk,ak->ai', rot_xy, rot_yz, self.spins)
 
     def measure_energy_density(self):
         self.energy_density = np.einsum('ai,ai->', self.spins, self.ham.dot(self.spins)) / (2. * self.n_spins)
@@ -248,10 +283,10 @@ class TDSystem:
         if shift:
             xs = xs + (ys * 0.5)
 
-        plt.scatter(xs, ys)
+        plt.scatter(xs, ys, marker='.')
 
         if lattice:
-            for i1 in range(self.inds.shape[0]):
+            for i1 in trange(self.inds.shape[0]):
                 for i2 in range(i1, self.inds.shape[0]):
                     ii1 = self.inds[i1]
                     ii2 = self.inds[i2]
@@ -259,11 +294,22 @@ class TDSystem:
                          plt.plot(xs[[i1, i2]], ys[[i1, i2]])
 
         if spins:
-            for i in range(self.inds.shape[0]):
+            for i in trange(self.inds.shape[0]):
                 plt.plot([xs[i], xs[i] + self.spins[self.inds[i], 0]/2], [ys[i], ys[i] + self.spins[self.inds[i], 1]/2], color='black')
 
     def plot_fourier(self):
         plt.imshow(self.fourier)
+
+    def measure_density(self):
+        es = np.einsum('ai,ai->a', self.spins, self.ham.dot(self.spins))
+        es /= np.array(self.conn.sum(axis=1)).reshape(-1)
+        self.density = es
+
+    def plot_density(self, hm=False):
+        if hm:
+            sns.heatmap(self.density.reshape(self.L, self.L))
+        else:
+            plt.imshow(self.density.reshape(self.L, self.L))
 
 
 
