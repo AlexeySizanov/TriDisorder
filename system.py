@@ -216,6 +216,7 @@ class TDSystem:
     def measure_all(self):
         self.measure_fourier()
         self.measure_energy_density()
+        self.measure_density()
 
     def measure_fourier(self):
         self.spins[self.hole_inds] = np.array([0., 0., 0.])
@@ -311,6 +312,9 @@ class TDSystem:
         else:
             plt.imshow(self.density.reshape(self.L, self.L))
 
+    def get_result(self):
+        self.measure_all()
+        return TDResult(self.L, self.c, self.energy_density, self.fourier, 1)
 
 
 class TDResult:
