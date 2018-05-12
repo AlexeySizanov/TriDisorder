@@ -118,6 +118,8 @@ class TDSystem:
         self.conn[self.hole_inds, self.hole_inds] = -1.
         self.conn = sparse.csr_matrix(self.conn)
 
+        self.n_neighbors = np.array(self.conn.sum(axis=1)).reshape(-1)
+
     def molecular_field(self, field=zero_field):
         return - self.conn.dot(self.spins) - field
 
@@ -203,12 +205,13 @@ class TDSystem:
     def relaxation(self, lr, alpha, n_steps=1, field=zero_field, beta=0.9):
         v = np.zeros_like(self.spins)
         w = np.zeros_like(self.spins)
+        ds = np.zeros_like(self.spins)
         for _ in range(n_steps):
             mf = self.molecular_field(field)
             MH = np.cross(self.spins, mf)
             w = beta * w - (1.-beta) * np.cross(self.spins, MH)
             # v = -gamma * MH + alpha * gamma * np.cross(self.spins, MH)
-            v = (np.cross(w, self.spins) + alpha * w)
+            v = (np.cross(w, self.spins) + alpha * np.cross(self.spins, v))
             self.spins += lr * v
             self.normalize()
 
@@ -303,7 +306,7 @@ class TDSystem:
 
     def measure_density(self):
         es = np.einsum('ai,ai->a', self.spins, self.ham.dot(self.spins))
-        es /= np.array(self.conn.sum(axis=1)).reshape(-1)
+        es /= self.n_neighbors
         self.density = es
 
     def plot_density(self, hm=False):
@@ -315,6 +318,40 @@ class TDSystem:
     def get_result(self):
         self.measure_all()
         return TDResult(self.L, self.c, self.energy_density, self.fourier, 1)
+
+    def measure_plane(self):
+        xs = self.inds % self.L
+        ys = self.inds // self.L
+
+        xs_pi = (xs + 1 < self.L)
+        ix_pi = (xs + 1)[xs_pi] + ys[xs_pi] * self.L
+        
+        xs_mi = (xs - 1 < self.L)
+        ix_mi = (xs - 1)[xs_mi] + ys[xs_mi] * self.L
+
+        ys_pi = (ys + 1 < self.L)
+        iy_pi = xs[ys_pi] + (ys + 1)[ys_pi] * self.L
+
+        ys_mi = (ys - 1 < self.L)
+        iy_mi = xs[ys_mi] + (ys - 1)[ys_mi] * self.L
+
+        res = np.zeros_like(self.spins)
+
+        res[xs_pi] += np.cross(self.spins[xs_pi], self.spins[ix_pi])
+        res[xs_mi] -= np.cross(self.spins[xs_mi], self.spins[ix_mi])
+        res[ys_pi] += np.cross(self.spins[ys_pi], self.spins[iy_pi])
+        res[ys_mi] -= np.cross(self.spins[ys_mi], self.spins[iy_mi])
+
+        self.plane = res / self.n_neighbors.reshape(-1, 1)
+
+    def plot_plane(self, i=2, hm=True):
+        values = self.plane[:, i].reshape(self.L, self.L)
+        if hm:
+            sns.heatmap(values)
+        else:
+            plt.imshow(values)
+
+
 
 
 class TDResult:
