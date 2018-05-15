@@ -8,6 +8,7 @@ import seaborn as sns
 from tqdm import tqdm, trange
 
 zero_field = np.array([0., 0., 0.])
+ez = np.array([0., 0., 1.])
 
 class TDSystem:
     def __init__(self, L, c, periodic=False):
@@ -30,10 +31,10 @@ class TDSystem:
             cosThetas
         ]).transpose((1, 0))
 
-        all_inds = np.arange(self.N)
-        self.inds = np.random.choice(all_inds, int(self.N * (1. - self.c)), replace=False)
+        self.inds_all = np.arange(self.N)
+        self.inds = np.random.choice(self.inds_all, int(self.N * (1. - self.c)), replace=False)
         self.inds.sort()
-        self.hole_inds = all_inds[~np.isin(all_inds, self.inds)]
+        self.hole_inds = self.inds_all[~np.isin(self.inds_all, self.inds)]
 
         self.n_spins = self.inds.shape[0]
         # self.spins[self.hole_inds] *= 0.
@@ -120,8 +121,12 @@ class TDSystem:
 
         self.n_neighbors = np.array(self.conn.sum(axis=1)).reshape(-1)
 
-    def molecular_field(self, field=zero_field):
-        return - self.conn.dot(self.spins) - field
+    def molecular_field(self, field=zero_field, field_gradient=None):
+        res = - self.conn.dot(self.spins) - field
+        if field_gradient is not None:
+            xs = self.inds_all % self.L
+            res += field_gradient * np.cos(2*np.pi * (xs + 0.1*self.step) / 10).reshape(-1, 1) * ez
+        return res
 
     def new_state(self, field=zero_field):
         new_spins = self.molecular_field(field)
@@ -202,24 +207,29 @@ class TDSystem:
         #     print(self.energy_density())
 
 
-    def relaxation(self, lr, alpha, n_steps=1, field=zero_field, beta=0.9):
+    def relaxation(self, lr, alpha, n_steps=1, field=zero_field, beta=0.9, field_gradient=None):
         v = np.zeros_like(self.spins)
         w = np.zeros_like(self.spins)
         ds = np.zeros_like(self.spins)
+
+        self.step = 0
+
         for _ in range(n_steps):
-            mf = self.molecular_field(field)
+            mf = self.molecular_field(field, field_gradient=field_gradient)
             MH = np.cross(self.spins, mf)
             w = beta * w - (1.-beta) * np.cross(self.spins, MH)
             # v = -gamma * MH + alpha * gamma * np.cross(self.spins, MH)
             v = (np.cross(w, self.spins) + alpha * np.cross(self.spins, v))
             self.spins += lr * v
             self.normalize()
+            self.step += 1
 
 
     def measure_all(self):
         self.measure_fourier()
         self.measure_energy_density()
         self.measure_density()
+        self.measure_plane()
 
     def measure_fourier(self):
         self.spins[self.hole_inds] = np.array([0., 0., 0.])
@@ -320,8 +330,10 @@ class TDSystem:
         return TDResult(self.L, self.c, self.energy_density, self.fourier, 1)
 
     def measure_plane(self):
-        xs = self.inds % self.L
-        ys = self.inds // self.L
+        xs = self.inds_all % self.L
+        ys = self.inds_all // self.L
+
+        self.spins[self.hole_inds] *= 0.
 
         xs_pi = (xs + 1 < self.L)
         ix_pi = (xs + 1)[xs_pi] + ys[xs_pi] * self.L
@@ -337,6 +349,7 @@ class TDSystem:
 
         res = np.zeros_like(self.spins)
 
+        #TODO: diagonal interactions!
         res[xs_pi] += np.cross(self.spins[xs_pi], self.spins[ix_pi])
         res[xs_mi] -= np.cross(self.spins[xs_mi], self.spins[ix_mi])
         res[ys_pi] += np.cross(self.spins[ys_pi], self.spins[iy_pi])
@@ -403,4 +416,5 @@ class TDResult:
         res.fourier = (self.fourier * self.n + other.fourier * other.n) / res.n
 
         return res
+
 
