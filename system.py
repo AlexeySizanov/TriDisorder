@@ -1,5 +1,4 @@
 import numpy as np
-from scipy import sparse
 from scipy import fftpack
 from multiprocessing import Pool
 
@@ -9,11 +8,9 @@ from tqdm import tqdm, trange
 
 import torch
 
-zero_field = torch.tensor([0., 0., 0.])
-ez = torch.tensor([0., 0., 1.])
 
 class TDSystem:
-    def __init__(self, L, c, periodic=False, cuda=True):
+    def __init__(self, L, c, periodic=False, cuda=True, field=None):
         self.L = L
         self.N = L ** 2
         self.Z = 6  # neighbors number in regular lattice
@@ -25,8 +22,17 @@ class TDSystem:
 
         self.make_spins()
         self.make_connections()
+        self.field = np.zeros(3) if field is None else field
 
-        self.zero_field = zero_field.cuda() if cuda else zero_field
+
+    @property
+    def field(self):
+        return self._field
+
+    @field.setter
+    def field(self, field):
+        self._field = torch.tensor(field, dtype=torch.float32, device = 'cuda' if self.cuda else 'cpu')
+
 
     def make_spins(self):
         thetas = np.arccos(np.random.rand(self.N + 1) * 2 - 1).astype(np.float32)
@@ -116,23 +122,25 @@ class TDSystem:
         conn[ys == self.L - 1, [[2], [5]]] = self.N
         conn = np.vstack([conn, [self.N]*6])
 
-        self.conn = torch.from_numpy(conn)
+        self.conn_numpy = conn
+        # self.conn = torch.from_numpy(conn)
+        self.conn = torch.tensor(conn, device='cuda' if self.cuda else 'cpu')
 
     def molecular_field_numpy(self):
-        return self.spins_numpy()[self.conn.numpy()].sum(axis=1)[:-1]
+        return self.spins_numpy()[self.conn_numpy].sum(axis=1)[:-1]
 
-    def energy_density(self, field=None):
-        if field is None:
-            field = self.zero_field
+    def energy_density(self):
         spins = self.spins()
         mf = [v[self.conn].sum(dim=1) for v in spins]
         res = sum([v * vmf for v, vmf in zip(spins, mf)]).sum() / (2 * self.N)
-        res.add_(sum(-v * fv for v, fv in zip(spins, field)).mean())
+        # res.add_(sum(-v * fv for v, fv in zip(spins, self._field)).mean())
+        res -= sum(v * fv for v, fv in zip(spins, self._field)).mean()
         self.measures['energy density'] = float(res)
         return res
 
 
-    def measure_energy_density_field(self, field=zero_field.numpy()):
+    def measure_energy_density_field(self):
+        field = self.field.cpu().numpy()
         spins = self.spins_numpy()[:-1]
         mf = self.molecular_field_numpy()
         self.measures['energy density field'] =  np.einsum('ai,ai->a', spins, mf / 2 - field)
@@ -157,7 +165,7 @@ class TDSystem:
     def make_xy(self):
         self.angles.data[:, 1] = np.pi / 2
 
-    def plot(self, draw_spins=True, lattice=True, shift=True, distortion=False):
+    def plot(self, draw_spins=True, draw_lattice=True, shift=True, distortion=False, draw_z=True, size=10):
         xs, ys = self.xy_from_inds(np.arange(self.N))
         spins = self.spins_numpy()
 
@@ -170,17 +178,26 @@ class TDSystem:
 
         plt.scatter(xs, ys, marker='.')
 
-        conn = self.conn.numpy()
+        conn = self.conn_numpy
         holes = np.isin(conn, self.hole_inds)
 
-        if lattice:
+        if draw_lattice:
             for i1 in tqdm(self.inds):
                 for i2 in conn[i1, ~holes[i1]]:
-                     plt.plot(xs[[i1, i2]], ys[[i1, i2]])
+                     plt.plot(xs[[i1, i2]], ys[[i1, i2]], color=(0,0,0,0.2))
+
+        if draw_z:
+            zs = spins[:, 2].copy()
+            colors = np.zeros((zs.shape[0], 4))
+            colors[:, 3] = 1.0
+            colors[zs > 0, 0] = zs[zs > 0]
+            colors[zs <= 0, 2] = -zs[zs <= 0]
+
+            plt.scatter(xs[self.inds], ys[self.inds], s=size**2, c=colors[self.inds])
 
         if draw_spins:
             for i in tqdm(self.inds):
-                plt.plot([xs[i], xs[i] + spins[i, 0]/2], [ys[i], ys[i] + spins[i, 1]/2], color='black')
+                plt.plot([xs[i], xs[i] + spins[i, 0]/2], [ys[i], ys[i] + spins[i, 1]/2], color=(0.2,1,0.2))
 
 
     def plot_fourier(self):
@@ -193,12 +210,14 @@ class TDSystem:
         den /= den.max()
 
         colors = np.zeros((den.shape[0], 3))
-        colors[:, 0] = den
+        colors[:,0] = den ** 0.5
+        # colors[:, 0] = -np.log(0.1 + den*0.9) / np.log(0.1)
 
         xs, ys = self.xy_from_inds(np.arange(self.N))
         xs = xs + ys / 2
 
-        plt.scatter(xs[self.inds], ys[self.inds], s=size, c=colors[self.inds])
+        plt.scatter(xs[self.inds], ys[self.inds], s=size**2, c=colors[self.inds, 0])
+        # plt.scatter(xs[self.inds], ys[self.inds], s=size, c=colors[self.inds], norm=plt.Normalize(0, 1))
 
 
 
