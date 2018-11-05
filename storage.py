@@ -2,13 +2,13 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from uuid import uuid4
-from system import TDSystem
+from .system import TDSystem
 import os
 
 class Storage:
     def __init__(self, name, replace=False):
         self.name = name
-        self.path = Path('/Data/tp') / name
+        self.path = Path('/Data/td') / name
 
         if not self.path.exists():
             self.path.mkdir()

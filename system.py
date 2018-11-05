@@ -161,12 +161,12 @@ class TDSystem:
         self.measures['fourier'] = (np.abs(fftpack.fft2(spins.reshape(self.L, self.L, 3), axes=(0, 1)))**2).sum(axis=-1)
 
 
-    def make_helix_xy(self):
+    def make_helix_xy(self, theta=None):
         xs = np.arange(self.L).reshape(-1, 1)
         ys = np.arange(self.L).reshape(1, -1)
         phis = np.pi * (4 * xs + 2 * ys) / 3
         self.angles.data[:-1, 0] = torch.tensor(phis.flatten(), dtype=torch.float32)
-        self.angles.data[:-1, 1] = np.pi / 2
+        self.angles.data[:-1, 1] = np.pi / 2 if theta is None else theta
 
     def make_xy(self):
         self.angles.data[:, 1] = np.pi / 2
@@ -228,38 +228,40 @@ class TDSystem:
 
 
     def measure_plane(self):
-        xs, ys = self.xy_from_inds(np.arange(self.N))
-
-        spins = self.spins_numpy()[:-1]
-
-        xs_pi = (xs + 1 < self.L)
-        ix_pi = (xs + 1)[xs_pi] + ys[xs_pi] * self.L
-        
-        xs_mi = (xs - 1 < self.L)
-        ix_mi = (xs - 1)[xs_mi] + ys[xs_mi] * self.L
-
-        ys_pi = (ys + 1 < self.L)
-        iy_pi = xs[ys_pi] + (ys + 1)[ys_pi] * self.L
-
-        ys_mi = (ys - 1 < self.L)
-        iy_mi = xs[ys_mi] + (ys - 1)[ys_mi] * self.L
-
-        res = np.zeros_like(spins)
-
-        #TODO: diagonal interactions!
-        res[xs_pi] += np.cross(self.spins[xs_pi], self.spins[ix_pi])
-        res[xs_mi] -= np.cross(self.spins[xs_mi], self.spins[ix_mi])
-        res[ys_pi] += np.cross(self.spins[ys_pi], self.spins[iy_pi])
-        res[ys_mi] -= np.cross(self.spins[ys_mi], self.spins[iy_mi])
-
-        self.plane = res / self.n_neighbors.reshape(-1, 1)
+        pass
+        # xs, ys = self.xy_from_inds(np.arange(self.N))
+        #
+        # spins = self.spins_numpy()[:-1]
+        #
+        # xs_pi = (xs + 1 < self.L)
+        # ix_pi = (xs + 1)[xs_pi] + ys[xs_pi] * self.L
+        #
+        # xs_mi = (xs - 1 < self.L)
+        # ix_mi = (xs - 1)[xs_mi] + ys[xs_mi] * self.L
+        #
+        # ys_pi = (ys + 1 < self.L)
+        # iy_pi = xs[ys_pi] + (ys + 1)[ys_pi] * self.L
+        #
+        # ys_mi = (ys - 1 < self.L)
+        # iy_mi = xs[ys_mi] + (ys - 1)[ys_mi] * self.L
+        #
+        # res = np.zeros_like(spins)
+        #
+        # #TODO: diagonal interactions!
+        # res[xs_pi] += np.cross(self.spins[xs_pi], self.spins[ix_pi])
+        # res[xs_mi] -= np.cross(self.spins[xs_mi], self.spins[ix_mi])
+        # res[ys_pi] += np.cross(self.spins[ys_pi], self.spins[iy_pi])
+        # res[ys_mi] -= np.cross(self.spins[ys_mi], self.spins[iy_mi])
+        #
+        # self.plane = res / self.n_neighbors.reshape(-1, 1)
 
     def plot_plane(self, i=2, hm=True):
-        values = self.plane[:, i].reshape(self.L, self.L)
-        if hm:
-            sns.heatmap(values)
-        else:
-            plt.imshow(values)
+        pass
+        # values = self.plane[:, i].reshape(self.L, self.L)
+        # if hm:
+        #     sns.heatmap(values)
+        # else:
+        #     plt.imshow(values)
 
     def save(self, filename):
         with open(filename, 'wb') as f:
@@ -289,7 +291,7 @@ class TDSystem:
 
 
     def cpu(self):
-        if self.cuda()
+        if self._cuda:
             self._cuda = False
             self.angles = self.angles.cpu()
             self.conn = self.conn.cpu()
