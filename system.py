@@ -10,13 +10,11 @@ import torch
 
 
 class TDSystem:
-    def __init__(self, L, c, periodic=False, cuda=True, field=None):
+    def __init__(self, L, c, field=None, cuda=True):
         self.L = L
         self.N = L ** 2
-        self.Z = 6  # neighbors number in regular lattice
         self.c = c
-        self.periodic=periodic
-        self.cuda = cuda
+        self._cuda = cuda
 
         self.measures = dict()
 
@@ -24,6 +22,14 @@ class TDSystem:
         self.make_connections()
         self.field = np.zeros(3) if field is None else field
 
+    @classmethod
+    def empty(cls, cuda=True):
+        return TDSystem(1, 0, cuda=cuda)
+
+    @classmethod
+    def load(cls, filename, cuda=True):
+        s = TDSystem.empty(cuda=cuda)
+        s._load(filename)
 
     @property
     def field(self):
@@ -31,7 +37,7 @@ class TDSystem:
 
     @field.setter
     def field(self, field):
-        self._field = torch.tensor(field, dtype=torch.float32, device = 'cuda' if self.cuda else 'cpu')
+        self._field = torch.tensor(field, dtype=torch.float32, device = 'cuda' if self._cuda else 'cpu')
 
 
     def make_spins(self):
@@ -44,7 +50,7 @@ class TDSystem:
         self.angles[:, 0] = torch.rand(self.N + 1) * 2 * np.pi # phis
         self.angles[:, 1] = torch.from_numpy(thetas) # thetas
 
-        if self.cuda:
+        if self._cuda:
             # self.thetas = self.thetas.cuda()
             # self.phis = self.phis.cuda()
             self.angles = self.angles.cuda()
@@ -58,7 +64,7 @@ class TDSystem:
 
         # self.thetas = torch.from_numpy(thetas)
         # self.phis = torch.rand(self.N + 1) * 2 * np.pi
-        device = 'cuda' if self.cuda else 'cpu'
+        device = 'cuda' if self._cuda else 'cpu'
         self.angles.data[:, 0] = torch.rand(self.N + 1, device=device) * 2 * np.pi # phis
         self.angles.data[:, 1] = torch.from_numpy(thetas, device=device) if not xy else np.pi/2 # thetas
 
@@ -124,7 +130,7 @@ class TDSystem:
 
         self.conn_numpy = conn
         # self.conn = torch.from_numpy(conn)
-        self.conn = torch.tensor(conn, device='cuda' if self.cuda else 'cpu')
+        self.conn = torch.tensor(conn, device='cuda' if self._cuda else 'cpu')
 
     def molecular_field_numpy(self):
         return self.spins_numpy()[self.conn_numpy].sum(axis=1)[:-1]
@@ -254,3 +260,36 @@ class TDSystem:
             sns.heatmap(values)
         else:
             plt.imshow(values)
+
+    def save(self, filename):
+        with open(filename, 'wb') as f:
+            np.savez(f,
+                     angles=self.angles.data.cpu().numpy(),
+                     conn=self.conn_numpy,
+                     L=[self.L,],
+                     c=[self.c],
+                     filed=self.field.cpu().numpy(),
+                     )
+
+    def _load(self, filename):
+        with open(filename, 'rb') as f:
+            data = np.load(f)
+            self.angles = torch.tensor(data['angles'], device='cuda' if self._cuda else 'cpu')
+            self.conn_numpy = data['conn']
+            self.conn = torch.tensor(self.conn_numpy, device='cuda' if self._cuda else 'cpu')
+            self.L = data['L'][0]
+            self.c = data['c'][0]
+            self.field = data['field']
+
+    def cuda(self):
+        if not self._cuda:
+            self._cuda = True
+            self.angles = self.angles.cuda()
+            self.conn = self.conn.cuda()
+
+
+    def cpu(self):
+        if self.cuda()
+            self._cuda = False
+            self.angles = self.angles.cpu()
+            self.conn = self.conn.cpu()
