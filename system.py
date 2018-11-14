@@ -66,7 +66,7 @@ class TDSystem:
         # self.phis = torch.rand(self.N + 1) * 2 * np.pi
         device = 'cuda' if self._cuda else 'cpu'
         self.angles.data[:, 0] = torch.rand(self.N + 1, device=device) * 2 * np.pi # phis
-        self.angles.data[:, 1] = torch.from_numpy(thetas, device=device) if not xy else np.pi/2 # thetas
+        self.angles.data[:, 1] = torch.tensor(thetas, device=device) if not xy else np.pi/2 # thetas
 
     def spins(self):
         phis, thetas = self.angles[:, 0], self.angles[:, 1]
@@ -100,6 +100,7 @@ class TDSystem:
 
     def inds_from_xy(self, x, y):
         return y * self.L + x
+
     def xy_from_inds(self, inds):
         return inds % self.L, inds // self.L
 
@@ -110,6 +111,11 @@ class TDSystem:
         self.hole_inds = torch.from_numpy(self.hole_inds)
         inds = np.arange(self.N)
         self.inds = inds[~np.isin(inds, self.hole_inds)]
+
+        xs, ys = self.xy_from_inds(self.inds)
+
+        self.fixed_index = ((xs - self.L / 2)**2 + (ys - self.L / 2)**2).argmin()
+
 
         xs, ys = self.xy_from_inds(np.arange(self.N))
 
@@ -170,6 +176,9 @@ class TDSystem:
 
     def make_xy(self):
         self.angles.data[:, 1] = np.pi / 2
+
+    def make_z(self, theta=np.pi/4):
+        self.angles.data[:, 1] = theta
 
     def plot(self, draw_spins=True, draw_lattice=True, shift=True, distortion=False, draw_z=True, size=10):
         xs, ys = self.xy_from_inds(np.arange(self.N))
