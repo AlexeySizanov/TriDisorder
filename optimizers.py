@@ -2,6 +2,10 @@ from torch.optim import Optimizer, SGD, Adam, Adadelta
 from torch.optim.lr_scheduler import LambdaLR
 import torch, math
 
+from torch import optim
+
+
+
 class Medo:
     def __init__(self, angles, thetas, hole_inds):
         self.angles = angles

@@ -1,4 +1,4 @@
-from .system import TDSystem
+from .system2d import TDSystem
 from .optimizers import Optimizer, Adam, SGD, LogCosineScheduler
 from tqdm import tqdm, trange
 from .storage import Storage

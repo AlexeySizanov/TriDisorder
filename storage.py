@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from uuid import uuid4
-from .system import TDSystem
+from .system2d import TDSystem
 import os
 
 class Storage:

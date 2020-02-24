@@ -135,7 +135,7 @@ class TDSystem:
         conn = np.vstack([conn, [self.N]*6])
 
         self.conn_numpy = conn
-        # self.conn = torch.from_numpy(conn)
+        # self.bonds = torch.from_numpy(bonds)
         self.conn = torch.tensor(conn, device='cuda' if self._cuda else 'cpu')
 
     def molecular_field_numpy(self):
@@ -286,7 +286,7 @@ class TDSystem:
         with open(filename, 'rb') as f:
             data = np.load(f)
             self.angles = torch.tensor(data['angles'], device='cuda' if self._cuda else 'cpu')
-            self.conn_numpy = data['conn']
+            self.conn_numpy = data['bonds']
             self.conn = torch.tensor(self.conn_numpy, device='cuda' if self._cuda else 'cpu')
             self.L = data['L'][0]
             self.c = data['c'][0]
