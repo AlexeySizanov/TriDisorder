@@ -227,7 +227,7 @@ class TDSystem3D:
                      plt.plot(xs_s[[i1, i2]], ys_s[[i1, i2]], color=(0,0,0,0.2))
 
 
-        spins = np.array([s.data.numpy() for s in self.spins()])
+        spins = np.array([s.data.cpu().numpy() for s in self.spins()])
         if draw_spins:
             for i in spin_inds:
                 plt.arrow(x=xs_s[i] - spins[0, i] / 4,
