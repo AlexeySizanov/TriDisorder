@@ -278,14 +278,15 @@ class TDSystem3D:
 
 
     def get_angles_from_spins(self, spins: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        thetas = torch.acos(spins[:, 2])
-        phis = torch.acos(spins[:, 0] / torch.sin(thetas)) * spins[:, 1].sign()
+        """ shape of spins is (3, N)"""
+        thetas = torch.acos(spins[2, :])
+        phis = torch.acos(spins[0, :] / torch.sin(thetas)) * spins[1, :].sign()
         return thetas, phis
 
     def optimize(self, n_steps: int, lr : float = 0.5):
         with torch.no_grad():
             spins = self.spins()
-            spins = torch.stack(spins, dim=1)
+            spins = torch.stack(spins, dim=0)  # shape = (3, N)
 
             es = []
             es_den = []
@@ -293,12 +294,12 @@ class TDSystem3D:
 
             n_bonds = float(self.bond_weights.sum() / 2)
             for i in trange(n_steps):
-                m_field = (spins[self.bonds, :] * self.bond_weights.view(-1, 8, 1)).sum(dim=1)
-                # m_field -= m_field * (m_field * spins).sum(dim=-1)
-                m_field_norm = m_field.norm(dim=-1, keepdim=True)
+                m_field = (spins[:, self.bonds] * self.bond_weights.view(1, -1, 8)).sum(dim=-1)  # shape = (3, N)
+                m_field[2, self.inds_z_bounds] = 0.
+                m_field_norm = m_field.norm(dim=0)
                 m_field_dir = m_field / (m_field_norm + 1e-10)
 
-                coss = -(spins * m_field_dir).sum(dim=-1)
+                coss = -(spins * m_field_dir).sum(dim=0)
                 coss[m_field_norm.view(-1) == 0] = 1.
                 angles = coss.acos()
                 angs.append(float(angles.max()) * 180 / np.pi)
@@ -308,7 +309,7 @@ class TDSystem3D:
                 es_den.append(e / n_bonds)
 
                 spins = spins * (1 - lr) - m_field_dir * lr
-                spins = spins / spins.norm(dim=-1, keepdim=True)
+                spins = spins / spins.norm(dim=0)
 
             thetas, phis = self.get_angles_from_spins(spins)
             self.thetas[:] = thetas
