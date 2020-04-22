@@ -81,7 +81,7 @@ class Worker3D:
         if folder is not None:
             filename = f'{folder}/{filename}'
 
-        for i in tqdm(count(1), total=n, desc='Number of realizations', ncols=80):
+        for i in tqdm(count(1), total=n, desc='Number of realizations', ncols=120):
             self._make_one_realization(device=device)
 
             if i % save_every == 0:
