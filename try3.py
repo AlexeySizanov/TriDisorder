@@ -5,15 +5,27 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 #%%
-s = TDSystem3D(L=10, H=10, c=0.3, device='cpu')
+s = TDSystem3D(L=12, H=12, c=0.3, device='cpu')
 s.make_spins(rand_scale=0.2)
 
-s.optimize(n_steps=3000)
+s.optimize_em(n_steps=3000)
+with torch.no_grad():
+    print('E =', float(s.energy()))
+s.find_twist(verbose=True)
 
-# s.check_minimum()
+# es = []
+#
+# opt = torch.optim.Adam(params=[s.thetas, s.phis], lr=0.001, betas=(0.9, 0.999))
+# for _ in trange(10000):
+#     opt.zero_grad()
+#     e = s.energy()
+#     es.append(float(e))
+#     e.backward()
+#     opt.step()
 
-t0 = time.time()
-s.find_twist()
-dt = time.time() - t0
+s.optimize_gd(n_steps=1000)
+with torch.no_grad():
+    print('E =', float(s.energy()))
+s.find_twist(verbose=True)
 
-print(f'time = {dt:.1f}s')
+#%%

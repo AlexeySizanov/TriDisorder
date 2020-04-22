@@ -50,5 +50,23 @@ class NDSparse:
 
         return NDSparse(self.n1, self.n2, self.block_size, mats=mats)
 
+    def __matmul__(self, a: np.ndarray) -> np.ndarray:
+        if a.shape[:2] != (self.n2, self.block_size):
+            raise ValueError('array mast have 2 dimensions.')
+
+        res = np.zeros((self.n1, self.block_size) + a.shape[2:])
+
+        a = a.reshape(self.n2 * self.block_size, *a.shape[2:])
+        ms = [sparse.hstack(m) for m in self.ms]
+
+        for i, m in enumerate(ms):
+            res[i] = m @ a
+
+        return res
+
+
+
+
+
     def get_matrix(self):
         return sparse.vstack([sparse.hstack(m) for m in self.ms])

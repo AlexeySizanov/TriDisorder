@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 import time
 
 import matplotlib.pyplot as plt
@@ -159,7 +159,7 @@ class TDSystem3D:
             self.bonds_gl = self.bonds_gl.cpu()
 
 
-    def spins(self, single: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def spins(self, single: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         :return: Tuple[torch.Tensor[shape=(N+1,)], torch.Tensor[shape=(N+1,)]]
         """
@@ -182,9 +182,11 @@ class TDSystem3D:
         return [si[self.bonds].sum(dim=-1) for si in self.spins()]
 
     def energy(self):
-        sx, sy, sz = self.spins()
-        e = sx * sx[self.bonds].sum(dim=-1) + sy * sy[self.bonds].sum(dim=-1) + sz * sz[self.bonds].sum(dim=-1)
-        return (e.sum() - self.n_false_bonds) / (2. * self.n_spins)
+        # sx, sy, sz = self.spins()
+        e_list = [s * (s[self.bonds] * self.bond_weights).sum(dim=-1) for s in self.spins()]
+        e = e_list[0] + e_list[1] + e_list[2]
+        # e = sx * sx[self.bonds].sum(dim=-1) + sy * sy[self.bonds].sum(dim=-1) + sz * sz[self.bonds].sum(dim=-1)
+        return e.sum() / 2.
 
 
     def plot(self,
@@ -284,7 +286,17 @@ class TDSystem3D:
         phis = torch.acos(spins[0, :] / torch.sin(thetas)) * spins[1, :].sign()
         return thetas, phis
 
-    def optimize(self, n_steps: int, lr : float = 0.5):
+    def optimize_gd(self, n_steps: int, lr: float = 0.001):
+        # opt = torch.optim.Adam(params=[self.thetas, self.phis], lr=lr, betas=(0.9, 0.999))
+        from utils.optimizer import MyAdam
+        opt = MyAdam(params=[self.thetas, self.phis], lr=lr, betas=(0.9, 0.999))
+        for _ in trange(n_steps, desc='GD optimization'):
+            opt.zero_grad()
+            self.energy().backward()
+            self.thetas.grad[self.inds_z_bounds] = 0.
+            opt.step()
+
+    def optimize_em(self, n_steps: int, lr: float = 0.5):
         with torch.no_grad():
             spins = self.spins()
             spins = torch.stack(spins, dim=0)  # shape = (3, N)
@@ -294,7 +306,7 @@ class TDSystem3D:
             angs = []
 
             n_bonds = float(self.bond_weights.sum() / 2)
-            for i in trange(n_steps):
+            for i in trange(n_steps, desc='EM optimization'):
                 m_field = (spins[:, self.bonds] * self.bond_weights.view(1, -1, 8)).sum(dim=-1)  # shape = (3, N)
                 m_field[2, self.inds_z_bounds] = 0.
                 m_field_norm = m_field.norm(dim=0)
@@ -318,7 +330,7 @@ class TDSystem3D:
 
         return es, es_den, angs
 
-    def find_twist(self):
+    def find_twist(self, verbose: bool = False):
         with torch.no_grad():
             # spins = torch.stack(self.spins(), dim=0).data.cpu().numpy()
             thetas = self.thetas.data.cpu().numpy()
@@ -405,16 +417,59 @@ class TDSystem3D:
         # -------------------------------------
 
         M = A.get_matrix()
+        r_x = SLA.lsqr(M, rhs_x.reshape(-1))[0].reshape(2, -1)
+        r_y = SLA.lsqr(M, rhs_y.reshape(-1))[0].reshape(2, -1)
 
-        t1 = time.time()
+        # -------------------------------------
 
-        rr = SLA.lsqr(M, rhs_x.reshape(-1), show=True)
+        H1 = sum([(Jzz * spins_d1[i, ..., None, None]) * spins_d1[i, None, None, ...] for i in range(3)])
+        tmp = np.einsum('ib, izwb -> zbw', m, spins_d2)
+        H2 = I * tmp[..., :, None]
 
-        print('', end='')
+        d2H = H1 + H2
+
+        d2Hxx = ((d2H @ r_x) * r_x).sum()
+        d2Hxy = ((d2H @ r_x) * r_y).sum()
+        d2Hyy = ((d2H @ r_y) * r_y).sum()
+
+        hess = np.array([[d2Hxx, d2Hxy],
+                         [d2Hxy, d2Hyy]])
+
+        vals, vecs = np.linalg.eigh(hess)
+
+        dH1 = np.einsum('in, izn, ezn -> e', m, spins_d1, [r_x, r_y])
+
+        if verbose:
+            print('Jacobian:')
+            print(dH1, '\n')
+
+            print('Hessian:')
+            print(hess, '\n')
+
+            print('Values:')
+            print(vals, '\n')
+
+            print('Vectors:')
+            print(vecs, '\n')
+
+
+        return vals, vecs, dH1
 
         # ---------------------------------------------------------------------------------------------
 
 
+    @torch.no_grad()
+    def all_spins(self):
+        spins = self.spins(single=True)
+        all_spins = torch.zeros(3, self.N, dtype=torch.double)
+        all_spins[:, self.spin_inds_gl] = spins
+        all_spins = all_spins.view(3, self.L, self.L, self.H)
+        return all_spins
+
+    def get_fourier(self):
+        spins = self.all_spins()
+        spins_fft = torch.rfft(spins, signal_ndim=3, onesided=False).pow(2).sum(dim=(0, -1))
+        return spins_fft
 
     def check_minimum(self):
         with torch.no_grad():
