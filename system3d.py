@@ -7,7 +7,7 @@ import torch
 import torch.sparse
 from scipy import sparse
 import scipy.sparse.linalg as SLA
-from tqdm import trange
+from tqdm import trange, tqdm
 
 from utils.ndsparse import NDSparse
 
@@ -296,7 +296,7 @@ class TDSystem3D:
             self.thetas.grad[self.inds_z_bounds] = 0.
             opt.step()
 
-    def optimize_em(self, n_steps: int, lr: float = 0.5):
+    def optimize_em(self, n_steps: int, lr: float = 0.5, progress: bool = True):
         with torch.no_grad():
             spins = self.spins()
             spins = torch.stack(spins, dim=0)  # shape = (3, N)
@@ -306,7 +306,7 @@ class TDSystem3D:
             angs = []
 
             n_bonds = float(self.bond_weights.sum() / 2)
-            for i in trange(n_steps, desc='EM optimization'):
+            for i in trange(n_steps, desc='EM optimization', disable=not progress):
                 m_field = (spins[:, self.bonds] * self.bond_weights.view(1, -1, 8)).sum(dim=-1)  # shape = (3, N)
                 m_field[2, self.inds_z_bounds] = 0.
                 m_field_norm = m_field.norm(dim=0)
@@ -330,7 +330,7 @@ class TDSystem3D:
 
         return es, es_den, angs
 
-    def find_twist(self, verbose: bool = False):
+    def find_twist(self, verbose: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         with torch.no_grad():
             # spins = torch.stack(self.spins(), dim=0).data.cpu().numpy()
             thetas = self.thetas.data.cpu().numpy()
@@ -461,7 +461,7 @@ class TDSystem3D:
     @torch.no_grad()
     def all_spins(self):
         spins = self.spins(single=True)
-        all_spins = torch.zeros(3, self.N, dtype=torch.double)
+        all_spins = torch.zeros(3, self.N, dtype=torch.double, device=self._device)
         all_spins[:, self.spin_inds_gl] = spins
         all_spins = all_spins.view(3, self.L, self.L, self.H)
         return all_spins
@@ -470,6 +470,27 @@ class TDSystem3D:
         spins = self.all_spins()
         spins_fft = torch.rfft(spins, signal_ndim=3, onesided=False).pow(2).sum(dim=(0, -1))
         return spins_fft
+
+    @torch.no_grad()
+    def get_chirality(self):
+        bonds = self.bonds[:, [1, 2, 4]]
+        bond_weights = self.bond_weights[:, [1, 2, 4]]
+
+        n_chiral_bonds = int(bond_weights.sum())
+
+        spins = self.spins(single=True)
+        spins_nn = spins[:, bonds] * bond_weights[None, ...]  # shape (3_xyz, N, 3_nn)
+
+        spins = spins.cpu().data.numpy()
+        spins_nn = spins_nn.numpy()
+
+        chirality = np.cross(spins[..., None], spins_nn, axis=0).sum(axis=(1, 2)) / n_chiral_bonds  # shape = (3,)
+
+        return np.linalg.norm(chirality)
+
+
+
+
 
     def check_minimum(self):
         with torch.no_grad():

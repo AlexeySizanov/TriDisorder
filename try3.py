@@ -6,7 +6,8 @@ torch.manual_seed(0)
 
 #%%
 s = TDSystem3D(L=12, H=12, c=0.3, device='cpu')
-s.make_spins(rand_scale=0.2)
+s.make_spins(rand_scale=0.0)
+print(s.get_chirality())
 
 s.optimize_em(n_steps=3000)
 with torch.no_grad():
