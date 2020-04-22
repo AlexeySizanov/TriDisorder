@@ -67,7 +67,7 @@ class Worker3D:
         return new
 
     def do(self, n: Optional[int] = None, save_every: Optional[int] = None,
-           device='cpu', filename=None):
+           device='cpu', folder=None, prefix=None):
 
         if n is None and save_every is None:
             raise Exception('n and save_every cannot both be None.')
@@ -75,10 +75,13 @@ class Worker3D:
         if save_every is None:
             save_every = n + 1
 
-        if filename is None:
-            filename = f'res_{self.H}_{self.L}_{self.c}'
+        filename = f'{self.H}_{self.L}_{self.c}'
+        if prefix is not None:
+            filename = f'{prefix}_{filename}'
+        if folder is not None:
+            filename = f'{folder}/{filename}'
 
-        for i in tqdm(count(1), total=n, desc='Number of realizations', leave=False):
+        for i in tqdm(count(1), total=n, desc='Number of realizations', ncols=80):
             self._make_one_realization(device=device)
 
             if i % save_every == 0:
