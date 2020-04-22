@@ -482,7 +482,7 @@ class TDSystem3D:
         spins_nn = spins[:, bonds] * bond_weights[None, ...]  # shape (3_xyz, N, 3_nn)
 
         spins = spins.cpu().data.numpy()
-        spins_nn = spins_nn.numpy()
+        spins_nn = spins_nn.cpu().numpy()
 
         chirality = np.cross(spins[..., None], spins_nn, axis=0).sum(axis=(1, 2)) / n_chiral_bonds  # shape = (3,)
 
