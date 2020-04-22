@@ -1,10 +1,5 @@
-import numpy as np
-import torch
-import tqdm
-from tqdm import trange
 from torch import optim
 from system3d import *
-from optimizer import DirOpt
 
 np.random.seed(0)
 torch.manual_seed(0)

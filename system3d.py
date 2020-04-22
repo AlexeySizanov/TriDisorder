@@ -1,15 +1,15 @@
 from typing import Tuple, Optional
-
-import numpy as np
-import pandas as pd
-from scipy import fftpack, sparse
-from multiprocessing import Pool
+import time
 
 import matplotlib.pyplot as plt
-import seaborn as sns
-from tqdm import tqdm, trange
+import numpy as np
+import torch
+import torch.sparse
+from scipy import sparse
+import scipy.sparse.linalg as SLA
+from tqdm import trange
 
-import torch, torch.sparse
+from utils.ndsparse import NDSparse
 
 
 class TDSystem3D:
@@ -114,10 +114,8 @@ class TDSystem3D:
         self.bond_weights_np[self.bonds_np == np.arange(self.n_spins).reshape(-1, 1)] = 0.
         self.bond_weights = torch.tensor(self.bond_weights_np, device=self._device)
 
-        all_inds_loc = np.arange(self.n_spins)
-
-        self.inds_z0 = all_inds_loc[mask_z0]
-        self.inds_z1 = all_inds_loc[mask_z1]
+        self.inds_z0 = mask_z0.nonzero()[0]
+        self.inds_z1 = mask_z1.nonzero()[0]
         self.inds_z_bounds = np.hstack([self.inds_z0, self.inds_z1])
 
         self.xs = xs
@@ -161,7 +159,7 @@ class TDSystem3D:
             self.bonds_gl = self.bonds_gl.cpu()
 
 
-    def spins(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def spins(self, single: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         :return: Tuple[torch.Tensor[shape=(N+1,)], torch.Tensor[shape=(N+1,)]]
         """
@@ -175,7 +173,10 @@ class TDSystem3D:
         sy = sin_theta * sin_phi
         sz = cos_theta
 
-        return sx, sy, sz
+        if single:
+            return torch.stack([sx, sy, sz], dim=0)
+        else:
+            return sx, sy, sz
 
     def molecular_field(self):
         return [si[self.bonds].sum(dim=-1) for si in self.spins()]
@@ -316,5 +317,135 @@ class TDSystem3D:
             self.phis[:] = phis
 
         return es, es_den, angs
+
+    def find_twist(self):
+        with torch.no_grad():
+            # spins = torch.stack(self.spins(), dim=0).data.cpu().numpy()
+            thetas = self.thetas.data.cpu().numpy()
+            phis = self.phis.data.cpu().numpy()
+
+        cos_th = np.cos(thetas)
+        sin_th = np.sin(thetas)
+        cos_phi = np.cos(phis)
+        sin_phi = np.sin(phis)
+
+        sx, sy, sz = sin_th * cos_phi, sin_th * sin_phi, cos_th  # shape = (N,)
+        spins = np.stack([sx, sy, sz], axis=0)  # shape = (3, N)
+
+        # -------------------------------------
+        # first derivative:
+
+        zeros = np.zeros_like(sx)
+        sx1 = np.stack([cos_th * cos_phi, -sy], axis=0)  # shape = (2, N)
+        sy1 = np.stack([cos_th * sin_phi, sx], axis=0)
+        sz1 = np.stack([-sin_th, zeros], axis=0)
+
+        spins_d1 = np.stack([sx1, sy1, sz1], axis=0)  # shape = (3, 2, N)
+
+        # -------------------------------------
+        # second derivative:
+
+        sx2 = np.array([[-sx, -sy1[0]],  # shape = (2, 2, N)
+                        [-sy1[0], -sx]])
+
+        sy2 = np.array([[-sy, sx1[0]],
+                        [sx1[0], -sy]])
+
+        sz2 = np.array([[-sz, zeros],
+                        [zeros, zeros]])
+
+        spins_d2 = np.stack([sx2, sy2, sz2], axis=0)  # shape = (3, 2, 2, N)
+
+        # -------------------------------------
+        m = (spins[:, self.bonds_np] * self.bond_weights_np.reshape(1, -1, 8)).sum(axis=-1)  # shape = (3, N)
+
+        mus = np.zeros((3, self.n_spins))  # shape = (3, N)
+        mus[2, self.inds_z_bounds] = 1.
+
+        eps_x = np.zeros((3, self.n_spins))  # shape = (3, N)
+        eps_x[0, self.inds_z0] = 1.
+
+        eps_y = np.zeros((3, self.n_spins))  # shape = (3, N)
+        eps_y[1, self.inds_z0] = 1.
+
+        P_spins_d1 = spins_d1.copy()  # shape = (3, 2, N)
+        P_spins_d1[2, :, self.inds_z_bounds] = 0.
+
+        P_m = m.copy()  # shape = (3, N)
+        P_m[2, self.inds_z_bounds] = 0.
+
+        J = sparse.lil_matrix((self.n_spins, self.n_spins))
+        J[np.arange(self.n_spins).reshape(-1, 1), self.bonds_np] = 1.
+        J[np.diag_indices_from(J)] = 0
+
+        # -------------------------------------
+        # first equation:
+
+        Jzz = NDSparse(2, 2, self.n_spins, block=J)
+        A1 = sum([(Jzz * P_spins_d1[i, ..., None, None]) * spins_d1[i, None, None, ...] for i in range(3)])
+
+        I = NDSparse(2, 2, self.n_spins, block=sparse.eye(self.n_spins, format='coo'))
+
+        P = np.eye(3)[..., None] - mus[None, ...] * mus[:, None, :]
+        tmp = np.einsum('ijb, ib, jzwb -> zbw', P, m, spins_d2)
+
+        # A2 = sum([I * spins_d2_T[i, ..., None]) * P_m[i, None, :, None, None] for i in range(3)])
+        A2 = I * tmp[..., :, None]
+
+        A = A1 + A2  # left side matrix
+
+        Pe_x = (mus[:, None, :] * eps_x[None, ...] + mus[None, ...] * eps_x[:, None, :])  # shape = (3, 3, n)
+        Pe_y = (mus[:, None, :] * eps_y[None, ...] + mus[None, ...] * eps_y[:, None, :])
+
+        # right side
+        rhs_x = np.einsum('ijn, in, jzn -> zn', Pe_x, m, spins_d1)
+        rhs_y = np.einsum('ijn, in, jzn -> zn', Pe_y, m, spins_d1)
+
+
+        # -------------------------------------
+
+        M = A.get_matrix()
+
+        t1 = time.time()
+
+        rr = SLA.lsqr(M, rhs_x.reshape(-1), show=True)
+
+        print('', end='')
+
+        # ---------------------------------------------------------------------------------------------
+
+
+
+    def check_minimum(self):
+        with torch.no_grad():
+            thetas = self.thetas.data.cpu().numpy()
+            phis = self.phis.data.cpu().numpy()
+
+        cos_th = np.cos(thetas)
+        sin_th = np.sin(thetas)
+        cos_phi = np.cos(phis)
+        sin_phi = np.sin(phis)
+
+        sx, sy, sz = sin_th * cos_phi, sin_th * sin_phi, cos_th  # shape = (N,)
+        spins = np.stack([sx, sy, sz], axis=0)  # shape = (3, N)
+
+        # -------------------------------------
+        # first derivative:
+
+        zeros = np.zeros_like(sx)
+        sx1 = np.stack([cos_th * cos_phi, -sy], axis=0)  # shape = (2, N)
+        sy1 = np.stack([cos_th * sin_phi, sx], axis=0)
+        sz1 = np.stack([-sin_th, zeros], axis=0)
+
+        spins_d1 = np.stack([sx1, sy1, sz1], axis=0)  # shape = (3, 2, N)
+
+
+        mf = (spins[:, self.bonds_np] * self.bond_weights_np[None, ...]).sum(axis=-1)  # shape = (3, N)
+        mf[2, self.inds_z_bounds] = 0
+
+        dd = np.einsum('in, izn ->zn', mf, spins_d1)
+
+        print('')
+
 
 
