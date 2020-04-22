@@ -1,3 +1,4 @@
+import gc
 from itertools import count
 from typing import Optional
 import pickle
@@ -35,6 +36,8 @@ class Worker3D:
         self.fourier = (self.fourier * self.n_realizations + fourier.numpy()) / (self.n_realizations + 1)
 
         self.n_realizations += 1
+        del s
+        gc.collect()
 
     def save(self, filename):
         np.savez(file=filename, L=self.L, H=self.H, c=self.c, n_realizations=self.n_realizations,
