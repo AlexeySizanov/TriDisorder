@@ -78,7 +78,7 @@ class Worker3D:
         if filename is None:
             filename = f'res_{self.H}_{self.L}_{self.c}'
 
-        for i in tqdm(count(1), total=n, desc='Number of realizations'):
+        for i in tqdm(count(1), total=n, desc='Number of realizations', leave=False):
             self._make_one_realization(device=device)
 
             if i % save_every == 0:
