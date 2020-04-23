@@ -40,7 +40,7 @@ class NDSparse:
         if a.ndim != 4:
             raise ValueError('array must have 4 dimensions')
 
-        mats = [[None, None], [None, None]]
+        mats = [[None for i2 in range(self.n2)] for i1 in range(self.n1)]
 
         n = 0
         for i1 in range(self.n1):
@@ -57,15 +57,22 @@ class NDSparse:
         res = np.zeros((self.n1, self.block_size) + a.shape[2:])
 
         a = a.reshape(self.n2 * self.block_size, *a.shape[2:])
-        ms = [sparse.hstack(m) for m in self.ms]
+        ms = [sparse.hstack(m, format='csr') for m in self.ms]
 
         for i, m in enumerate(ms):
             res[i] = m @ a
 
         return res
 
+    def filter(self, mask: np.ndarray):
+        mats = [[None for i2 in range(self.n2)] for i1 in range(self.n1)]
+        inds = mask.nonzero()[0]
+        inds = inds.reshape(-1, 1), inds.reshape(1, -1)
+        for i1 in range(self.n1):
+            for i2 in range(self.n2):
+                mats[i1][i2] = self.ms[i1][i2].tolil()[inds]
 
-
+        return NDSparse(n1=self.n1, n2=self.n2, block_size=mask.sum(), mats=mats)
 
 
     def get_matrix(self):

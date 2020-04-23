@@ -21,9 +21,30 @@ class Worker3D:
         self.chirality = []
         self.fourier = np.zeros((L, L, H))
 
-    def _make_one_realization(self, device='cpu'):
+    def _make_one_realization(self, device='cpu', progress=False):
         s = TDSystem3D(L=self.L, H=self.H, c=self.c, device=device)
-        s.optimize_em(n_steps=3000, progress=False)
+        s.save_init_state()
+
+        lr = 0.5
+        last_max_angle = 180.
+
+        while True:
+            s.optimize_em(n_steps=3000, lr=lr, progress=progress)
+            gc.collect()
+            deq, max_angle = s.check_minimum()
+            if progress:
+                print(f'max angle = {max_angle}')
+            if max_angle > 0.5:
+                lr *= 0.8
+                print(f'max angle > 0.5: lr -> {lr}')
+                s.restore_init_state()
+                continue
+            if max_angle < 0.001:
+                break
+            # if max_angle > last_max_angle:
+            #     lr *= 0.8
+            #     print(f'growth: lr -> {lr}')
+            last_max_angle = max_angle
 
         vals, vecs, dH1 = s.find_twist()
         self.dH1.append(np.linalg.norm(dH1))

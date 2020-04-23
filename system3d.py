@@ -294,12 +294,17 @@ class TDSystem3D:
     def optimize_gd(self, n_steps: int, lr: float = 0.001):
         # opt = torch.optim.Adam(params=[self.thetas, self.phis], lr=lr, betas=(0.9, 0.999))
         from utils.optimizer import MyAdam
-        opt = MyAdam(params=[self.thetas, self.phis], lr=lr, betas=(0.9, 0.999))
+        # opt = MyAdam(params=[self.thetas, self.phis], lr=lr, betas=(0.9, 0.99))
+        opt = torch.optim.SGD(params=[self.thetas, self.phis], lr=lr)
+        es = []
         for _ in trange(n_steps, desc='GD optimization'):
             opt.zero_grad()
-            self.energy().backward()
-            self.thetas.grad[self.inds_z_bounds] = 0.
+            e = self.energy()
+            es.append(float(e))
+            e.backward()
+            self.thetas.grad.data[self.inds_z_bounds] = 0.
             opt.step()
+        return es
 
     def optimize_em(self, n_steps: int, lr: float = 0.5, progress: bool = True):
         with torch.no_grad():
@@ -494,7 +499,7 @@ class TDSystem3D:
         return np.linalg.norm(chirality)
 
 
-    def check_minimum(self):
+    def check_minimum(self) -> Tuple[float, float]:
         with torch.no_grad():
             cos_th = torch.cos(self.thetas)
             sin_th = torch.sin(self.thetas)
@@ -538,4 +543,11 @@ class TDSystem3D:
         return float(max_residual), float(max_angle_deg)
 
 
+    def save_init_state(self):
+        self.init_thetas = self.thetas.data.cpu().numpy().copy()
+        self.init_phis = self.phis.data.cpu().numpy().copy()
+
+    def restore_init_state(self):
+        self.thetas = torch.from_numpy(self.init_thetas).to(device=self._device)
+        self.phis = torch.from_numpy(self.init_phis).to(device=self._device)
 
