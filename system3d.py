@@ -12,6 +12,13 @@ from tqdm import trange, tqdm
 from utils.ndsparse import NDSparse
 
 
+def xyz_from_inds(inds, L):
+    Nxy = L ** 2
+    z = inds // Nxy
+    xy = inds % Nxy
+    return xy % L, xy // L, z
+
+
 class TDSystem3D:
     """
     Variables:   3D spins.
@@ -48,9 +55,7 @@ class TDSystem3D:
         return x + y * self.L + z * self.Nxy
 
     def xyz_from_inds_gl(self, inds):
-        z = inds // self.Nxy
-        xy = inds % self.Nxy
-        return xy % self.L, xy // self.L, z
+        return xyz_from_inds(inds, L=self.L)
 
     def make_connections(self):
         """
@@ -489,39 +494,48 @@ class TDSystem3D:
         return np.linalg.norm(chirality)
 
 
-
-
-
     def check_minimum(self):
         with torch.no_grad():
-            thetas = self.thetas.data.cpu().numpy()
-            phis = self.phis.data.cpu().numpy()
+            cos_th = torch.cos(self.thetas)
+            sin_th = torch.sin(self.thetas)
+            cos_phi = torch.cos(self.phis)
+            sin_phi = torch.sin(self.phis)
 
-        cos_th = np.cos(thetas)
-        sin_th = np.sin(thetas)
-        cos_phi = np.cos(phis)
-        sin_phi = np.sin(phis)
+        # ---------------------------------------------------------------------------------------------
+        # check minium equation:
 
         sx, sy, sz = sin_th * cos_phi, sin_th * sin_phi, cos_th  # shape = (N,)
-        spins = np.stack([sx, sy, sz], axis=0)  # shape = (3, N)
+        spins = torch.stack([sx, sy, sz], dim=0)  # shape = (3, N)
 
         # -------------------------------------
         # first derivative:
 
-        zeros = np.zeros_like(sx)
-        sx1 = np.stack([cos_th * cos_phi, -sy], axis=0)  # shape = (2, N)
-        sy1 = np.stack([cos_th * sin_phi, sx], axis=0)
-        sz1 = np.stack([-sin_th, zeros], axis=0)
+        zeros = torch.zeros_like(sx)
+        sx1 = torch.stack([cos_th * cos_phi, -sy], dim=0)  # shape = (2, N)
+        sy1 = torch.stack([cos_th * sin_phi, sx], dim=0)
+        sz1 = torch.stack([-sin_th, zeros], dim=0)
 
-        spins_d1 = np.stack([sx1, sy1, sz1], axis=0)  # shape = (3, 2, N)
+        spins_d1 = torch.stack([sx1, sy1, sz1], dim=0)  # shape = (3, 2, N)
 
 
-        mf = (spins[:, self.bonds_np] * self.bond_weights_np[None, ...]).sum(axis=-1)  # shape = (3, N)
+        mask = self.bond_weights.sum(dim=-1) >= 1  # mask for spins with any connection.
+
+        mf = (spins[:, self.bonds] * self.bond_weights[None, ...]).sum(dim=-1)  # shape = (3, N)
         mf[2, self.inds_z_bounds] = 0
 
-        dd = np.einsum('in, izn ->zn', mf, spins_d1)
+        max_residual = torch.einsum('in, izn -> zn', mf[:, mask], spins_d1[..., mask]).abs().max()
 
-        print('')
+        # ---------------------------------------------------------------------------------------------
+        # check angle
+
+        spins = spins[:, mask]
+        mf = mf[:, mask]
+
+        mmf_dir = - mf / mf.norm(dim=0, keepdim=True).clamp(min=1e-10)
+
+        max_angle_deg = torch.einsum('in, in -> n', mmf_dir, spins).clamp(-1, 1).acos().max() * 180 / np.pi
+
+        return float(max_residual), float(max_angle_deg)
 
 
 
