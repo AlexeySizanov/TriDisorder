@@ -25,7 +25,9 @@ class Worker3D:
         s = TDSystem3D(L=self.L, H=self.H, c=self.c, device=device)
         s.save_init_state()
 
-        while True:
+        for i in count(1):
+            if i == 100:
+                return False
             s.optimize_em(n_steps=n_steps, lr=lr, progress=progress)
             gc.collect()
             qe, deq, max_angle, mean_angle  = s.check_minimum()
@@ -52,6 +54,8 @@ class Worker3D:
         self.n_realizations += 1
         del s
         gc.collect()
+
+        return True
 
     def save(self, filename):
         np.savez(file=filename, L=self.L, H=self.H, c=self.c, n_realizations=self.n_realizations,
@@ -96,7 +100,8 @@ class Worker3D:
             filename = f'{folder}/{filename}'
 
         for i in tqdm(count(1), total=n, desc='Number of realizations', ncols=120):
-            self._make_one_realization(device=device)
+            while not self._make_one_realization(device=device):
+                pass
 
             if i % save_every == 0:
                 self.save(filename=filename)
