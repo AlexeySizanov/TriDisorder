@@ -112,3 +112,16 @@ class Worker3D:
         if i % save_every != 0:
             self.save(filename=filename)
 
+    def get_mean_sampling(self, name: str, n_dist: int = 1000):
+        x = np.array(self.__dict__[name]).reshape(self.n_realizations, -1)
+        inds = np.random.randint(low=0, high=self.n_realizations, size=(self.n_realizations, n_dist))
+        y = x[inds, :].mean(axis=0)
+        if x.shape[1] == 1:
+            y = y[..., 0]
+
+        # r = []
+        #
+        # for i in range(x.shape[0]):
+        #     r.append(np.random.choice(x[:, 0], size=(self.n_realizations, n_dist), replace=True).mean(axis=-1))
+
+        return y
