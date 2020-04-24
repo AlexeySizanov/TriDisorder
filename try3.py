@@ -8,7 +8,7 @@ torch.manual_seed(seed)
 #%%
 s = TDSystem3D(L=20, H=20, c=0.5, device='cpu')
 s.make_spins(rand_scale=0.2)
-print(s.check_minimum())
+print('\n', s.check_minimum())
 
 s.optimize_em(n_steps=3000, lr=0.5)
 print('\n', s.check_minimum())

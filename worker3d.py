@@ -28,12 +28,12 @@ class Worker3D:
         while True:
             s.optimize_em(n_steps=n_steps, lr=lr, progress=progress)
             gc.collect()
-            deq, max_angle = s.check_minimum()
+            qe, deq, max_angle, mean_angle  = s.check_minimum()
             if progress:
-                print(f'max angle = {max_angle}')
-            if max_angle > 0.5:
+                print(f'\nE = {qe:.7f}, eq_diff = {deq:.10f},  max angle = {max_angle:.10f},  mean_angle = {mean_angle:.10f}')
+            if mean_angle > 1.:
                 lr *= 0.8
-                print(f'max angle > 0.5: lr -> {lr}')
+                print(f'mean angle > 1.: lr -> {lr}')
                 s.restore_init_state()
                 continue
             if max_angle < 0.001:

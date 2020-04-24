@@ -71,6 +71,10 @@ class TDSystem3D:
         self.n_spins = len(spin_inds_gl)
 
         xs, ys, zs = self.xyz_from_inds_gl(spin_inds_gl)  # x, y, z coords of all nodes.
+        self.sublattices = (2 * xs + ys) % 3
+        self.A_inds = (self.sublattices == 0).nonzero()[0]
+        self.B_inds = (self.sublattices == 1).nonzero()[0]
+        self.C_inds = (self.sublattices == 2).nonzero()[0]
 
         self.all_inds_gl = torch.from_numpy(all_inds_gl)
         self.hole_inds_gl = torch.from_numpy(hole_inds_gl)
@@ -293,7 +297,7 @@ class TDSystem3D:
 
     def optimize_gd(self, n_steps: int, lr: float = 0.001):
         # opt = torch.optim.Adam(params=[self.thetas, self.phis], lr=lr, betas=(0.9, 0.999))
-        from utils.optimizer import MyAdam
+        # from utils.optimizer import MyAdam
         # opt = MyAdam(params=[self.thetas, self.phis], lr=lr, betas=(0.9, 0.99))
         opt = torch.optim.SGD(params=[self.thetas, self.phis], lr=lr)
         es = []
@@ -306,39 +310,27 @@ class TDSystem3D:
             opt.step()
         return es
 
+    @torch.no_grad()
     def optimize_em(self, n_steps: int, lr: float = 0.5, progress: bool = True):
-        with torch.no_grad():
-            spins = self.spins()
-            spins = torch.stack(spins, dim=0)  # shape = (3, N)
+        spins = self.spins()
+        spins = torch.stack(spins, dim=0)  # shape = (3, N)
 
-            es = []
-            es_den = []
-            angs = []
+        n_bonds = float(self.bond_weights.sum() / 2)
+        for i in trange(n_steps, desc='EM optimization', disable=not progress):
+            m_field = (spins[:, self.bonds] * self.bond_weights.view(1, -1, 8)).sum(dim=-1)  # shape = (3, N)
+            m_field[2, self.inds_z_bounds] = 0.
+            m_field_norm = m_field.norm(dim=0)
+            m_field_dir = m_field / m_field_norm.clamp(min=1e-10)
 
-            n_bonds = float(self.bond_weights.sum() / 2)
-            for i in trange(n_steps, desc='EM optimization', disable=not progress):
-                m_field = (spins[:, self.bonds] * self.bond_weights.view(1, -1, 8)).sum(dim=-1)  # shape = (3, N)
-                m_field[2, self.inds_z_bounds] = 0.
-                m_field_norm = m_field.norm(dim=0)
-                m_field_dir = m_field / (m_field_norm + 1e-10)
+            coss = -(spins * m_field_dir).sum(dim=0)
+            coss[m_field_norm.view(-1) == 0] = 1.
+            spins = spins * (1 - lr) - m_field_dir * lr
+            spins = spins / spins.norm(dim=0)
 
-                coss = -(spins * m_field_dir).sum(dim=0)
-                coss[m_field_norm.view(-1) == 0] = 1.
-                angles = coss.acos()
-                angs.append(float(angles.max()) * 180 / np.pi)
+        thetas, phis = self.get_angles_from_spins(spins)
+        self.thetas[:] = thetas
+        self.phis[:] = phis
 
-                e = float((spins * m_field_dir).sum())
-                es.append(e)
-                es_den.append(e / n_bonds)
-
-                spins = spins * (1 - lr) - m_field_dir * lr
-                spins = spins / spins.norm(dim=0)
-
-            thetas, phis = self.get_angles_from_spins(spins)
-            self.thetas[:] = thetas
-            self.phis[:] = phis
-
-        return es, es_den, angs
 
     def find_twist(self, verbose: bool = False) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         with torch.no_grad():
@@ -499,7 +491,7 @@ class TDSystem3D:
         return np.linalg.norm(chirality)
 
 
-    def check_minimum(self) -> Tuple[float, float]:
+    def check_minimum(self) -> Tuple[float, float, float, float]:
         with torch.no_grad():
             cos_th = torch.cos(self.thetas)
             sin_th = torch.sin(self.thetas)
@@ -538,9 +530,10 @@ class TDSystem3D:
 
         mmf_dir = - mf / mf.norm(dim=0, keepdim=True).clamp(min=1e-10)
 
-        max_angle_deg = torch.einsum('in, in -> n', mmf_dir, spins).clamp(-1, 1).acos().max() * 180 / np.pi
+        angles_deg = torch.einsum('in, in -> n', mmf_dir, spins).clamp(-1, 1).acos() * 180 / np.pi
+        qe = torch.einsum('in, in ->', mf, spins) / 2.
 
-        return float(max_residual), float(max_angle_deg)
+        return float(qe), float(max_residual), float(angles_deg.max()), float(angles_deg.mean())
 
 
     def save_init_state(self):
