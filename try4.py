@@ -1,10 +1,26 @@
-from worker3d import *
 import torch
+import numpy as np
 
-seed = 3
+seed = 1
 np.random.seed(seed)
 torch.manual_seed(seed)
 
-w = Worker3D(L=30, H=30, c=0.6)
-w._make_one_realization(lr=0.5, progress=True, device='cpu')
+import matplotlib.pyplot as plt
 
+from worker3d import Worker3D
+from system3d import  TDSystem3D
+
+s = TDSystem3D(L=10, H=10, c=0.5, device='cpu', random_scale=0)
+
+# for i in range(10):
+s.optimize_em(n_steps=10000, force_plane=True)
+print('')
+print(s.check_minimum())
+print('')
+
+s.find_twist(verbose=True)
+
+print(float(s.energy()))
+
+# s.plot(z=4, draw_lattice=True)
+# plt.show()
