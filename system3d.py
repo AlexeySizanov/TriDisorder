@@ -1,4 +1,4 @@
-from typing import Tuple, Optional, Union
+from typing import Tuple, Optional, Union, NamedTuple
 import time
 
 import matplotlib.pyplot as plt
@@ -27,28 +27,32 @@ class TDSystem3D:
     Disorder:    Non-magnetic impurities.
     Boundaries:  Open BC.
     """
-    def __init__(self, L: int, H: int, c: float, device: str = 'cuda'):
+    def __init__(self, L: int, H: int, c: float,
+                 spin_inds_gl: Optional[np.ndarray] = None,
+                 thetas: Optional[np.ndarray] = None,
+                 phis: Optional[np.ndarray] = None,
+                 random_scale: Optional[float] = 0.2,
+                 device: str = 'cuda'):
         """
         :param L: Side of the rhombus.
         :param H: Height of the stack.
         :param c: impurities concentration.
-        :param field: 2d (xy) vector of the field.
         :param device: device for computations.
         """
         if device not in ('cuda', 'cpu'):
             raise ValueError('`device` must be "cuda" (default) or "cpu".')
 
         self.L = L
-        self.H = H
+        self.H = H + 2
         self.Nxy = L ** 2
-        self.N = H * self.Nxy
+        self.N = self.H * self.Nxy
         self.c = c
         self._device = device
 
         self.measures = dict()
 
-        self.make_connections()
-        self.make_spins()
+        self.make_connections(spin_inds_gl)
+        self.make_spins(thetas=thetas, phis=phis, rand_scale=random_scale)
 
 
     def inds_from_xyz_gl(self, x, y, z):
@@ -57,7 +61,7 @@ class TDSystem3D:
     def xyz_from_inds_gl(self, inds):
         return xyz_from_inds(inds, L=self.L)
 
-    def make_connections(self):
+    def make_connections(self, spin_inds_gl: Optional[np.ndarray] = None):
         """
         Global ("gl" suffix) indices are indices inside whole lattice.
         Local ("loc" suffix) indices are sequential indices of the magnetic sites only(0, 1, ..., #magnetic sites).
@@ -66,8 +70,14 @@ class TDSystem3D:
         # ---------------------------------------------------------------------------------------------
         # making indices:
         all_inds_gl = np.arange(self.N)  # indices of all nodes (spins + holes)
-        hole_inds_gl = np.random.choice(all_inds_gl, int(self.N * self.c), replace=False)  # indices of the holes
-        spin_inds_gl = np.setdiff1d(all_inds_gl, hole_inds_gl)  # indices of the spins
+        is_new_config = spin_inds_gl is None
+        if is_new_config:
+            hole_inds_gl = np.random.choice(all_inds_gl, int(self.N * self.c), replace=False)  # indices of the holes
+            _, _, zs_holes = self.xyz_from_inds_gl(hole_inds_gl)
+            hole_inds_gl = hole_inds_gl[~np.isin(zs_holes, [0, self.H - 1])]
+            spin_inds_gl = np.setdiff1d(all_inds_gl, hole_inds_gl)  # indices of the spins
+        else:
+            hole_inds_gl = np.setdiff1d(all_inds_gl, spin_inds_gl)
         self.n_spins = len(spin_inds_gl)
 
         xs, ys, zs = self.xyz_from_inds_gl(spin_inds_gl)  # x, y, z coords of all nodes.
@@ -112,45 +122,73 @@ class TDSystem3D:
         all_bonds_gl[mask_z0, [[7]]] = spin_inds_gl[mask_z0]
         all_bonds_gl[mask_z1, [[6]]] = spin_inds_gl[mask_z1]
 
+        self.inds_z0 = mask_z0.nonzero()[0]
+        self.inds_z1 = mask_z1.nonzero()[0]
+        self.inds_z_bounds = np.hstack([self.inds_z0, self.inds_z1])
+        self.z_bound_mask_t = torch.tensor(np.isin(np.arange(self.n_spins), self.inds_z_bounds).astype(float),
+                                           dtype=torch.double, device=self._device)
+
+
         holes_mask = np.isin(all_bonds_gl, hole_inds_gl) | (all_bonds_gl < 0) | (all_bonds_gl >= self.N)
         all_bonds_gl[holes_mask] = np.repeat(spin_inds_gl.reshape(-1, 1), 8, axis=1)[holes_mask]
         self.n_false_bonds = holes_mask.sum()
 
         self.bonds_np = global_to_local[all_bonds_gl]
-        self.bonds = torch.tensor(self.bonds_np, device=self._device)
+        if is_new_config:
+            conn = sparse.lil_matrix((self.n_spins, self.n_spins))
+            conn[np.arange(self.n_spins).reshape(-1, 1), self.bonds_np] = 1
+            conn[np.diag_indices_from(conn)] = 0
+            _, labels = sparse.csgraph.connected_components(conn)
+            z0_bound_labels = np.unique(labels[self.inds_z0])
+            z1_bound_labels = np.unique(labels[self.inds_z1])
+            z_bound_labels = np.intersect1d(z0_bound_labels, z1_bound_labels)
+            global_new_hole_inds = spin_inds_gl[~np.isin(labels, z_bound_labels)]
+            spin_inds_gl = np.setdiff1d(spin_inds_gl, global_new_hole_inds)
+            spin_inds_gl.sort()
+            self.make_connections(spin_inds_gl)
 
-        self.bond_weights_np = np.ones_like(self.bonds_np, dtype=float)
-        self.bond_weights_np[self.bonds_np == np.arange(self.n_spins).reshape(-1, 1)] = 0.
-        self.bond_weights = torch.tensor(self.bond_weights_np, device=self._device)
+        else:
+            self.bonds = torch.tensor(self.bonds_np, device=self._device)
 
-        self.inds_z0 = mask_z0.nonzero()[0]
-        self.inds_z1 = mask_z1.nonzero()[0]
-        self.inds_z_bounds = np.hstack([self.inds_z0, self.inds_z1])
+            self.bond_weights_np = np.ones_like(self.bonds_np, dtype=float)
+            self.bond_weights_np[self.bonds_np == np.arange(self.n_spins).reshape(-1, 1)] = 0.
+            self.bond_weights = torch.tensor(self.bond_weights_np, device=self._device)
 
-        self.xs = xs
-        self.ys = ys
-        self.zs = zs
+            self.xs = xs
+            self.ys = ys
+            self.zs = zs
 
 
-    def make_spins(self, rand_scale=0.2, rand_z_bounds: bool = False):
-        self.thetas = torch.full([self.n_spins], fill_value=np.pi / 2, dtype=torch.double)
-        self.phis = torch.tensor( (2 * np.pi / 3) * (self.xs - self.ys) + np.pi * self.zs) % (2 * np.pi) + np.pi / 6
+    def make_spins(self, rand_scale=0.2, rand_z_bounds: bool = False,
+                   thetas: Optional[np.ndarray] = None,
+                   phis: Optional[np.ndarray] = None):
+        if thetas is None:
+            if phis is not None:
+                raise ValueError('`phis` is None while `thetas` is not.')
+            self.thetas = torch.full([self.n_spins], fill_value=np.pi / 2, dtype=torch.double)
+            self.phis = torch.tensor( (2 * np.pi / 3) * (self.xs - self.ys) + np.pi * self.zs) % (2 * np.pi) + np.pi / 6
 
-        r1 = (2 * torch.rand(self.n_spins) - 1) * rand_scale
-        r2 = (2 * torch.rand(self.n_spins) - 1) * rand_scale
+            r1 = (2 * torch.rand(self.n_spins) - 1) * rand_scale
+            r2 = (2 * torch.rand(self.n_spins) - 1) * rand_scale
 
-        if not rand_z_bounds:
-            r1[self.inds_z_bounds] = 0.
-            r2[self.inds_z_bounds] = 0.
+            if not rand_z_bounds:
+                r1[self.inds_z_bounds] = 0.
+                r2[self.inds_z_bounds] = 0.
 
-        self.thetas += r1
-        self.phis += r2
+            self.thetas += r1
+            self.phis += r2
 
-        self.thetas = self.thetas.to(device=self._device)
-        self.thetas.requires_grad = True
+            self.thetas = self.thetas.to(device=self._device)
+            self.thetas.requires_grad = True
 
-        self.phis = self.phis.to(self._device)
-        self.phis.requires_grad = True
+            self.phis = self.phis.to(self._device)
+            self.phis.requires_grad = True
+
+        else:
+            if phis is None:
+                raise ValueError('`thetas` is None while `phis` is not.')
+            self.thetas = torch.tensor(data=thetas.copy(), device=self._device)
+            self.phis = torch.tensor(data=phis.copy(), device=self._device)
 
 
     def cuda(self):
@@ -168,7 +206,7 @@ class TDSystem3D:
             self.bonds_gl = self.bonds_gl.cpu()
 
 
-    def spins(self, single: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    def spins(self, return_tensor: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         :return: Tuple[torch.Tensor[shape=(N+1,)], torch.Tensor[shape=(N+1,)]]
         """
@@ -182,21 +220,18 @@ class TDSystem3D:
         sy = sin_theta * sin_phi
         sz = cos_theta
 
-        if single:
+        if return_tensor:
             return torch.stack([sx, sy, sz], dim=0)
         else:
             return sx, sy, sz
 
-    def molecular_field(self):
-        return [si[self.bonds].sum(dim=-1) for si in self.spins()]
-
     def energy(self):
         # sx, sy, sz = self.spins()
-        e_list = [s * (s[self.bonds] * self.bond_weights).sum(dim=-1) for s in self.spins()]
+        sx, sy, sz = self.spins()
+        sz *= self.z_bound_mask_t
+        e_list = [s * (s[self.bonds] * self.bond_weights).sum(dim=-1) for s in (sx, sy, sz)]
         e = e_list[0] + e_list[1] + e_list[2]
-        # e = sx * sx[self.bonds].sum(dim=-1) + sy * sy[self.bonds].sum(dim=-1) + sz * sz[self.bonds].sum(dim=-1)
         return e.sum() / 2.
-
 
     def plot(self,
              z: Optional[int] = None,
@@ -311,14 +346,16 @@ class TDSystem3D:
         return es
 
     @torch.no_grad()
-    def optimize_em(self, n_steps: int, lr: float = 0.5, progress: bool = True):
+    def optimize_em(self, n_steps: int, lr: float = 0.5, force_plane: bool = True, progress: bool = True):
         spins = self.spins()
         spins = torch.stack(spins, dim=0)  # shape = (3, N)
-
-        n_bonds = float(self.bond_weights.sum() / 2)
+        # zz = []
         for i in trange(n_steps, desc='EM optimization', disable=not progress):
             m_field = (spins[:, self.bonds] * self.bond_weights.view(1, -1, 8)).sum(dim=-1)  # shape = (3, N)
-            m_field[2, self.inds_z_bounds] = 0.
+            if force_plane:
+                m_field[2, :] = 0.
+            else:
+                m_field[2, self.inds_z_bounds] = 0.
             m_field_norm = m_field.norm(dim=0)
             m_field_dir = m_field / m_field_norm.clamp(min=1e-10)
 
@@ -326,6 +363,7 @@ class TDSystem3D:
             coss[m_field_norm.view(-1) == 0] = 1.
             spins = spins * (1 - lr) - m_field_dir * lr
             spins = spins / spins.norm(dim=0)
+            # zz.append(spins[2].abs().max())
 
         thetas, phis = self.get_angles_from_spins(spins)
         self.thetas[:] = thetas
@@ -462,7 +500,7 @@ class TDSystem3D:
 
     @torch.no_grad()
     def all_spins(self):
-        spins = self.spins(single=True)
+        spins = self.spins(return_tensor=True)
         all_spins = torch.zeros(3, self.N, dtype=torch.double, device=self._device)
         all_spins[:, self.spin_inds_gl] = spins
         all_spins = all_spins.view(3, self.L, self.L, self.H)
@@ -477,10 +515,11 @@ class TDSystem3D:
     def get_chirality(self):
         bonds = self.bonds[:, [1, 2, 4]]
         bond_weights = self.bond_weights[:, [1, 2, 4]]
+        bond_weights[self.inds_z_bounds, :] = 0
 
         n_chiral_bonds = int(bond_weights.sum())
 
-        spins = self.spins(single=True)
+        spins = self.spins(return_tensor=True)
         spins_nn = spins[:, bonds] * bond_weights[None, ...]  # shape (3_xyz, N, 3_nn)
 
         spins = spins.cpu().data.numpy()
