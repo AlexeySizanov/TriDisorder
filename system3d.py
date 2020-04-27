@@ -409,22 +409,45 @@ class TDSystem3D:
         spins_d2 = np.stack([sx2, sy2, sz2], axis=0)  # shape = (3, 2, 2, N)
 
         # -------------------------------------
-        m = (spins[:, self.bonds_np] * self.bond_weights_np.reshape(1, -1, 8)).sum(axis=-1)  # shape = (3, N)
+        # m = (spins[:, self.bonds_np] * self.bond_weights_np.reshape(1, -1, 8)).sum(axis=-1)  # shape = (3, N)
 
-        mus = np.zeros((3, self.n_spins))  # shape = (3, N)
+        mus = np.zeros_like(spins)  # shape = (3, N)
         mus[2, self.inds_z_bounds] = 1.
 
-        eps_x = np.zeros((3, self.n_spins))  # shape = (3, N)
-        eps_x[0, self.inds_z0] = 1.
+        mus_eps = np.zeros_like(spins)
+        mus_eps[2, self.inds_z0] = 1.
 
-        eps_y = np.zeros((3, self.n_spins))  # shape = (3, N)
-        eps_y[1, self.inds_z0] = 1.
+        eps = np.zeros((2, *spins.shape))  # shape = (2_eta, 3_xy, N)
+        eps[0, 0, self.inds_z0] = 1.
+        eps[1, 1, self.inds_z0] = 1.
 
-        P_spins_d1 = spins_d1.copy()  # shape = (3, 2, N)
-        P_spins_d1[2, :, self.inds_z_bounds] = 0.
+        # P.shape = (3, 3, N)
+        P = np.eye(3).reshape(3, 3, 1) - mus[None, :, :] * mus[:, None, :]
 
-        P_m = m.copy()  # shape = (3, N)
-        P_m[2, self.inds_z_bounds] = 0.
+        # R.shape = (2, 3, 3, N)
+        R = - eps[:, :, None, :] * mus[None, None, :, :] - eps[:, None, :, :] * mus[None, :, None, :]
+
+        # T.shape = (2, 2, 3, 3, N)
+        T = - eps[:, None, :, None, :] * eps[None, :, None, :, :] - eps[:, None, None, :, :] * eps[None, :, :, None, :]
+        T +=  np.eye(2)[..., None, None, None] * mus_eps[None, None, None, :, :] * mus_eps[None, None, :, None, :]
+
+        # eps_x = np.zeros((3, self.n_spins))  # shape = (3, N)
+        # eps_x[0, self.inds_z0] = 1.
+        #
+        # eps_y = np.zeros((3, self.n_spins))  # shape = (3, N)
+        # eps_y[1, self.inds_z0] = 1.
+
+        P_spins = np.einsum('ijn, jn -> in', P, spins)
+        P_spins_d1 = np.einsum('ijn, jzn -> izn', P, spins_d1)
+        P_spins_d2 = np.einsum('ijn, jzwn -> izwn', P, spins_d2)
+
+        R_spins = np.einsum('eijn, jn -> ein', R, spins)
+        R_spins_d1 = np.einsum('eijn, jzn -> eizn', R, spins_d1)
+
+        T_spins = np.einsum('erijn, jn -> erin', T, spins)
+
+        P_m = (P_spins[:, self.bonds_np] * self.bond_weights_np.reshape(1, -1, 8)).sum(axis=-1)  # shape = (3, N)
+        R_m = (R_spins[..., self.bonds_np] * self.bond_weights_np.reshape(1, 1, -1, 8)).sum(axis=-1)  # shape = (2, 3, N)
 
         J = sparse.lil_matrix((self.n_spins, self.n_spins))
         J[np.arange(self.n_spins).reshape(-1, 1), self.bonds_np] = 1.
@@ -434,50 +457,52 @@ class TDSystem3D:
         # first equation:
 
         Jzz = NDSparse(2, 2, self.n_spins, block=J)
-        A1 = sum([(Jzz * P_spins_d1[i, ..., None, None]) * spins_d1[i, None, None, ...] for i in range(3)])
+        A1 = sum([(Jzz * P_spins_d1[i, ..., None, None]) * P_spins_d1[i, None, None, ...] for i in range(3)])
 
         I = NDSparse(2, 2, self.n_spins, block=sparse.eye(self.n_spins, format='coo'))
 
-        P = np.eye(3)[..., None] - mus[None, ...] * mus[:, None, :]
-        tmp = np.einsum('ijb, ib, jzwb -> zbw', P, m, spins_d2)
+        # P = np.eye(3)[..., None] - mus[None, ...] * mus[:, None, :]
+        # tmp = np.einsum('ijb, ib, jzwb -> zbw', P, m, spins_d2)
+
+        tmp = np.einsum('in, izwn -> znw', P_m, P_spins_d2)
 
         # A2 = sum([I * spins_d2_T[i, ..., None]) * P_m[i, None, :, None, None] for i in range(3)])
         A2 = I * tmp[..., :, None]
 
         A = A1 + A2  # left side matrix
 
-        Pe_x = (mus[:, None, :] * eps_x[None, ...] + mus[None, ...] * eps_x[:, None, :])  # shape = (3, 3, n)
-        Pe_y = (mus[:, None, :] * eps_y[None, ...] + mus[None, ...] * eps_y[:, None, :])
+        # Pe_x = (mus[:, None, :] * eps_x[None, ...] + mus[None, ...] * eps_x[:, None, :])  # shape = (3, 3, n)
+        # Pe_y = (mus[:, None, :] * eps_y[None, ...] + mus[None, ...] * eps_y[:, None, :])
 
         # right side
-        rhs_x = np.einsum('ijn, in, jzn -> zn', Pe_x, m, spins_d1)
-        rhs_y = np.einsum('ijn, in, jzn -> zn', Pe_y, m, spins_d1)
+        # rhs_x = np.einsum('ijn, in, jzn -> zn', Pe_x, m, spins_d1)
+        # rhs_y = np.einsum('ijn, in, jzn -> zn', Pe_y, m, spins_d1)
+
+        # rhs:  shape = (2_\eta, 2_z, N)
+        rhs = - np.einsum('ein, izn -> ezn', R_m, P_spins_d1) - np.einsum('in, eizn -> ezn', P_m, R_spins_d1)
 
 
         # -------------------------------------
 
         M = A.get_matrix()
-        r_x = SLA.lsqr(M, rhs_x.reshape(-1))[0].reshape(2, -1)
-        r_y = SLA.lsqr(M, rhs_y.reshape(-1))[0].reshape(2, -1)
-
+        r_x = SLA.lsqr(M, rhs[0].reshape(-1))[0].reshape(2, -1)
+        r_y = SLA.lsqr(M, rhs[1].reshape(-1))[0].reshape(2, -1)
+        r = np.stack([r_x, r_y], axis=0)  # shape = (2_eta, 2_z, n)
         # -------------------------------------
 
-        H1 = sum([(Jzz * spins_d1[i, ..., None, None]) * spins_d1[i, None, None, ...] for i in range(3)])
-        tmp = np.einsum('ib, izwb -> zbw', m, spins_d2)
-        H2 = I * tmp[..., :, None]
+        # d2H_1 = sum([(Jzz * spins_d1[i, ..., None, None]) * spins_d1[i, None, None, ...] for i in range(3)])
+        # tmp = np.einsum('ib, izwb -> zbw', m, spins_d2)
+        # d2H_2 = I * tmp[..., :, None]
 
-        d2H = H1 + H2
+        d2H_1 = np.einsum('ein, rin -> er', R_m, R_spins) + np.einsum('in, erin -> er', P_spins, T_spins)
+        d2H_2 = np.einsum('ezn, rzn -> er',
+                          np.einsum('ein, izn -> ezn', R_m, P_spins_d1) + np.einsum('in, eizn -> ezn', P_m, R_spins_d1),
+                          r)
 
-        d2Hxx = ((d2H @ r_x) * r_x).sum()
-        d2Hxy = ((d2H @ r_x) * r_y).sum()
-        d2Hyy = ((d2H @ r_y) * r_y).sum()
-
-        hess = np.array([[d2Hxx, d2Hxy],
-                         [d2Hxy, d2Hyy]])
-
+        hess = d2H_1 + d2H_2
         vals, vecs = np.linalg.eigh(hess)
 
-        dH1 = np.einsum('in, izn, ezn -> e', m, spins_d1, [r_x, r_y])
+        dH1 = np.einsum('in, ein -> e', P_m, R_spins)
 
         if verbose:
             print('Jacobian:')
